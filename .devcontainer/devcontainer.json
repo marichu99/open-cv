@@ -1,0 +1,15 @@
+{
+  "name": "YOLOv8 Development",
+  "image": "ultralytics/ultralytics:latest-python",
+  "workspaceFolder": "/workspace",
+  "remoteUser": "root",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-toolsai.jupyter"
+      ]
+    }
+  },
+  "postCreateCommand": "pip install --upgrade pip && pip list"
+}

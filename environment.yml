@@ -1,0 +1,17 @@
+name: yolo-lean
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - torch==2.6.0
+    - torchvision==0.21.0
+    - opencv-python==4.10.0.84
+    - ultralytics==8.3.70
+    - numpy==2.0.2
+    - pillow==11.0.0
+    - matplotlib==3.10.8
+    - tqdm==4.67.1
+    - pyyaml==6.0.2
