@@ -1,3 +1,5 @@
 opencv-contrib-python
 caer
 ultralytics
+playwright
+bs4
