@@ -1,0 +1,141 @@
+@import url("https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap");
+@import "tailwindcss";
+
+@theme inline {
+  --font-display: "Source Serif 4", Georgia, serif;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-cand-1: var(--cand-1);
+  --color-cand-2: var(--cand-2);
+  --color-cand-3: var(--cand-3);
+  --color-cand-4: var(--cand-4);
+  --radius-md: var(--radius);
+}
+
+:root {
+  --background: #f2f4f0;
+  --foreground: #1b231e;
+  --card: #ffffff;
+  --card-foreground: #1b231e;
+  --muted: #eaeee7;
+  --muted-foreground: #5b6760;
+  --border: #d9ded6;
+  --input: #d9ded6;
+  --ring: #1e6f57;
+
+  --primary: #1e6f57;
+  --primary-foreground: #ffffff;
+  --secondary: #2b3a55;
+  --secondary-foreground: #ffffff;
+
+  --accent: #dceae3;
+  --accent-foreground: #155744;
+
+  --destructive: #8c3232;
+  --destructive-foreground: #ffffff;
+  --warning: #8a5a14;
+  --warning-foreground: #ffffff;
+
+  --radius: 0.6rem;
+
+  --cand-1: #1e6f57;
+  --cand-2: #2b3a55;
+  --cand-3: #9c6b24;
+  --cand-4: #6b4c7a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --background: #10150f;
+    --foreground: #e7ece5;
+    --card: #171f19;
+    --card-foreground: #e7ece5;
+    --muted: #0d110e;
+    --muted-foreground: #a7b3a9;
+    --border: #263025;
+    --input: #263025;
+    --ring: #4fc08d;
+
+    --primary: #4fc08d;
+    --primary-foreground: #0d150f;
+    --secondary: #93a9cf;
+    --secondary-foreground: #10150f;
+
+    --accent: #1d3a2e;
+    --accent-foreground: #6fd5a6;
+
+    --destructive: #e08080;
+    --destructive-foreground: #2a0f0f;
+    --warning: #e0a542;
+    --warning-foreground: #2a1c05;
+
+    --cand-1: #4fc08d;
+    --cand-2: #93a9cf;
+    --cand-3: #d9a44c;
+    --cand-4: #b489c8;
+  }
+}
+
+:root[data-theme="dark"] {
+  --background: #10150f;
+  --foreground: #e7ece5;
+  --card: #171f19;
+  --card-foreground: #e7ece5;
+  --muted: #0d110e;
+  --muted-foreground: #a7b3a9;
+  --border: #263025;
+  --input: #263025;
+  --ring: #4fc08d;
+
+  --primary: #4fc08d;
+  --primary-foreground: #0d150f;
+  --secondary: #93a9cf;
+  --secondary-foreground: #10150f;
+
+  --accent: #1d3a2e;
+  --accent-foreground: #6fd5a6;
+
+  --destructive: #e08080;
+  --destructive-foreground: #2a0f0f;
+  --warning: #e0a542;
+  --warning-foreground: #2a1c05;
+
+  --cand-1: #4fc08d;
+  --cand-2: #93a9cf;
+  --cand-3: #d9a44c;
+  --cand-4: #b489c8;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
