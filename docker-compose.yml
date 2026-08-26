@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: tally333
+      POSTGRES_PASSWORD: tally333
+      POSTGRES_DB: tally333
+    ports:
+      - "5433:5432"  # host 5433 to avoid clashing with a local Postgres install
+    volumes:
+      - tally333_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tally333"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://tally333:tally333@db:5432/tally333
+    ports:
+      - "8000:8080"  # 5000 clashes with AirPlay/other local services on many machines
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - tally333_uploads:/app/instance/uploads
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: http://localhost:8000
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+volumes:
+  tally333_pgdata:
+  tally333_uploads:
