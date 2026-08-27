@@ -1,16 +1,19 @@
+import os
 from datetime import datetime, timezone
 
 from flask import Blueprint, request, jsonify, current_app, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 
 from app.extensions import db, socketio
-from app.models import Agent, PollingStation, FormSubmission, VoteRecord
+from app.models import Agent, PollingStation, FormSubmission, VoteRecord, VerificationLog
 from app.models.submission import FORM_LEVEL_LETTERS, TALLIED_STATUSES
 from app.services.cv_pipeline import get_extraction_service
 from app.services.storage import LocalStorage
-from app.services.dedup import find_existing_approved
+from app.services.dedup import find_existing_approved, supersede
 from app.services.pdf import is_pdf, pdf_first_page_to_image
 from app.services.candidates import get_or_create_candidate, geo_scope_for_position
+from app.services.location_check import location_mismatches
+from app.services.image_quality import looks_blank
 from app.utils.errors import ApiError
 from app.utils.rbac import role_required
 
@@ -62,6 +65,16 @@ def create_draft():
     storage = LocalStorage(current_app.config["UPLOAD_DIR"])
     image_path, sha256 = storage.save(upload)
 
+    if looks_blank(image_path):
+        try:
+            os.remove(image_path)
+        except OSError:
+            pass
+        raise ApiError(
+            "This photo looks blank or unreadable — please retake it with the form clearly in frame.",
+            status_code=422,
+        )
+
     existing = FormSubmission.query.filter_by(
         station_id=station.id, form_type=form_type, image_sha256=sha256
     ).first()
@@ -70,6 +83,20 @@ def create_draft():
 
     service = get_extraction_service(current_app.config["CV_BACKEND"])
     result = service.extract(image_path, position, form_type)
+
+    mismatches = location_mismatches(result.detected_location, station)
+    if mismatches:
+        try:
+            os.remove(image_path)
+        except OSError:
+            pass
+        raise ApiError(
+            "This photo doesn't look like it's for the station you selected — "
+            + "; ".join(mismatches)
+            + ". Please pick the matching county/constituency/ward/polling station, or "
+            "upload the form for the station you selected.",
+            status_code=422,
+        )
 
     submission = FormSubmission(
         station_id=station.id,
@@ -115,19 +142,50 @@ def finalize(submission_id):
     if submission.status != "draft":
         raise ApiError("Submission has already been finalized")
 
+    # The submitting agent can fix a misread figure right here in the
+    # preview — the same "corrected value wins" mechanism a coordinator uses
+    # in the review dialog, just applied before the submission ever leaves
+    # draft status.
+    corrections = (request.get_json(silent=True) or {}).get("corrections") or []
+    if corrections:
+        by_candidate = {str(v.candidate_id): v for v in submission.vote_records}
+        for correction in corrections:
+            record = by_candidate.get(str(correction.get("candidate_id")))
+            if not record:
+                continue
+            record.votes_corrected = correction.get("votes_corrected")
+            record.manually_overridden = True
+        db.session.add(
+            VerificationLog(
+                submission_id=submission.id,
+                reviewer_id=get_jwt_identity(),
+                action="manual_correct",
+                notes="Corrected by the submitting agent before finalizing",
+            )
+        )
+
     threshold = current_app.config["CONFIDENCE_THRESHOLD"]
     duplicate = find_existing_approved(submission.station_id, submission.form_type, submission.id)
 
+    # The agent has already seen the extracted figures and had the chance to
+    # correct them (see the `corrections` handling above), so their
+    # confirmation is authoritative — including over an earlier submission
+    # for the same station, which this one supersedes rather than waiting on
+    # a coordinator. Warnings — an arithmetic mismatch, low confidence,
+    # anything Claude Vision itself flagged — still count toward the tally,
+    # but stay visible for a coordinator to spot-check after the fact.
+    warnings = list(submission.warnings or [])
+    if not _arithmetic_ok(submission):
+        warnings.append("Extracted candidate votes + rejected ballots don't add up to the declared total votes cast")
+    if float(submission.ocr_confidence_avg or 0) / 100 < threshold:
+        warnings.append(f"Overall extraction confidence below the {threshold:.0%} review threshold")
+    submission.warnings = warnings
+
+    submission.status = "auto_approved"
+    submission.finalized_at = datetime.now(timezone.utc)
     if duplicate:
-        submission.status = "pending_review"
         submission.duplicate_of = duplicate.id
-    elif submission.warnings or not _arithmetic_ok(submission):
-        submission.status = "pending_review"
-    elif float(submission.ocr_confidence_avg or 0) / 100 < threshold:
-        submission.status = "pending_review"
-    else:
-        submission.status = "auto_approved"
-        submission.finalized_at = datetime.now(timezone.utc)
+        supersede(duplicate, submission, submission.agent_id, "Superseded by a newer confirmed submission for this station")
 
     db.session.commit()
 

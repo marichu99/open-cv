@@ -29,6 +29,19 @@ class FieldExtraction:
 
 
 @dataclass
+class DetectedLocation:
+    """The County/Constituency/Ward/Polling Station names read off the
+    form's own header — compared against what the agent selected for the
+    upload (see services/location_check.py) so a photo can't silently get
+    recorded against the wrong station. Any field the model couldn't read
+    stays None rather than guessing."""
+    county: str | None = None
+    constituency: str | None = None
+    ward: str | None = None
+    polling_station: str | None = None
+
+
+@dataclass
 class ExtractionResult:
     form_type_detected: str
     votes: list[FieldExtraction]
@@ -37,6 +50,10 @@ class ExtractionResult:
     total_votes_confidence: float
     rejected_ballots_confidence: float
     warnings: list[str] = field(default_factory=list)
+    #: None means this backend doesn't read the form header at all (e.g. the
+    #: mock backend) — location cross-checking is skipped in that case,
+    #: rather than treating "nothing detected" as a mismatch.
+    detected_location: DetectedLocation | None = None
 
     @property
     def overall_confidence(self) -> float:

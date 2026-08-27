@@ -74,7 +74,14 @@ def fake_pdf_bytes():
 
     doc = fitz.open()
     page = doc.new_page()
-    page.insert_text((72, 72), "Test Form 34A")
+    # A single line of text renders as a near-blank page — draw enough of a
+    # table-like grid that this actually looks like a filled-in form (the
+    # blank-photo pre-filter would otherwise reject it, correctly, since a
+    # one-liner really is what it's checking for).
+    for i in range(10):
+        y = 72 + i * 20
+        page.draw_line((72, y), (500, y))
+        page.insert_text((80, y - 4), f"Row {i}: Test Form 34A candidate line")
     buf = doc.tobytes()
     doc.close()
     return io.BytesIO(buf)

@@ -6,6 +6,7 @@ from flask_jwt_extended import get_jwt_identity
 from app.extensions import db, socketio
 from app.models import FormSubmission, VoteRecord, VerificationLog
 from app.models.submission import REVIEW_ACTIONS, TALLIED_STATUSES
+from app.services.dedup import supersede
 from app.utils.errors import ApiError
 from app.utils.rbac import role_required
 
@@ -65,6 +66,15 @@ def review_submission(submission_id):
                 notes=notes,
             )
         )
+
+        # Approving a submission that was held as a likely duplicate means
+        # "this one is the correct reading" — the earlier submission it
+        # named as the original must stop counting, or this station's votes
+        # would be tallied twice.
+        if action == "approve" and submission.duplicate_of:
+            original = db.session.get(FormSubmission, submission.duplicate_of)
+            if original and original.status in TALLIED_STATUSES:
+                supersede(original, submission, get_jwt_identity(), f"Superseded by {submission.id} on manual review")
 
     db.session.commit()
 
