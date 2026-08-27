@@ -7,7 +7,7 @@ OUTPUT_DIR = "/home/mabera/personal/FORM34A_images"
 
 
 def convert_pdfs_to_images(source_dir: str = SOURCE_DIR, output_dir: str = OUTPUT_DIR, dpi: int = 150) -> None:
-    pdf_files = list(Path(source_dir).rglob("*.pdf"))
+    pdf_files = [p for p in Path(source_dir).rglob("*") if p.suffix.lower() == ".pdf"]
     total = len(pdf_files)
 
     if total == 0:
@@ -24,12 +24,13 @@ def convert_pdfs_to_images(source_dir: str = SOURCE_DIR, output_dir: str = OUTPU
                 page = doc[page_num]
                 pix = page.get_pixmap(dpi=dpi)
                 # Flatten the nested path into a unique filename
-                rel = pdf_path.relative_to(source_dir)
-                name = str(rel).replace("/", "_").replace(".pdf", f"_p{page_num}.png")
+                rel = pdf_path.relative_to(source_dir).with_suffix("")
+                name = str(rel).replace("/", "_") + f"_p{page_num}.png"
                 out_path = os.path.join(output_dir, name)
                 pix.save(out_path)
+            page_count = len(doc)
             doc.close()
-            print(f"[{idx}/{total}] Converted: {pdf_path.name} ({len(doc)} page(s))")
+            print(f"[{idx}/{total}] Converted: {pdf_path.name} ({page_count} page(s))")
         except Exception as e:
             print(f"[{idx}/{total}] ERROR on {pdf_path}: {e}")
 

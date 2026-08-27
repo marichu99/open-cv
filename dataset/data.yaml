@@ -1,0 +1,6 @@
+path: /home/mabera/personal/open-cv/dataset
+train: images/train
+val: images/val
+
+nc: 1
+names: ["form34a"]
