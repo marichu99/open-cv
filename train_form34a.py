@@ -9,9 +9,13 @@ def train() -> None:
 
     model.train(
         data=DATASET_YAML,
-        epochs=50,
-        imgsz=640,
-        batch=8,
+        epochs=30,
+        imgsz=320,
+        batch=4,
+        device="cpu",
+        workers=0,
+        cache=False,
+        patience=10,
         name="form34a_detector",
         project="runs/train",
     )
