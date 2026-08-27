@@ -65,12 +65,18 @@ function FilePreview({ file }: { file: File }) {
       <img
         src={objectUrl}
         alt="Selected form preview"
-        className="max-h-80 w-full rounded-md border border-border object-contain"
+        className="max-h-[28rem] w-full rounded-md border border-border object-contain"
       />
     );
   }
   if (isPdf) {
-    return <iframe src={objectUrl} title="Selected form preview" className="h-80 w-full rounded-md border border-border" />;
+    return (
+      <iframe
+        src={objectUrl}
+        title="Selected form preview"
+        className="h-[28rem] w-full rounded-md border border-border"
+      />
+    );
   }
   return (
     <div className="flex items-center gap-2 rounded-md border border-border bg-muted p-3 text-sm">
@@ -92,6 +98,7 @@ function UploadForm() {
   const [prefilled, setPrefilled] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<FormSubmission | null>(null);
+  const [corrections, setCorrections] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
 
   const counties = useCounties();
@@ -134,6 +141,7 @@ function UploadForm() {
     }
     setBusy(true);
     setPreview(null);
+    setCorrections({});
     try {
       const form = new FormData();
       form.append("station_id", stationId);
@@ -154,7 +162,12 @@ function UploadForm() {
     if (!preview) return;
     setBusy(true);
     try {
-      const res = await api.post<FormSubmission>(`/api/submissions/${preview.id}/finalize`);
+      const payload = {
+        corrections: Object.entries(corrections)
+          .filter(([, v]) => v !== "")
+          .map(([candidate_id, v]) => ({ candidate_id, votes_corrected: Number(v) })),
+      };
+      const res = await api.post<FormSubmission>(`/api/submissions/${preview.id}/finalize`, payload);
       setPreview(res.data);
       const status = STATUS_LABEL[res.data.status];
       toast.success(`Submitted — ${status?.label ?? res.data.status}`);
@@ -168,6 +181,7 @@ function UploadForm() {
   function resetForCapture() {
     setFile(null);
     setPreview(null);
+    setCorrections({});
   }
 
   return (
@@ -333,13 +347,27 @@ function UploadForm() {
           {preview && (
             <div className="flex flex-col gap-4">
               <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Extracted preview</span>
+                <div className="flex flex-col">
+                  <span className="text-sm text-muted-foreground">Extracted preview</span>
+                  {preview.status === "draft" && (
+                    <span className="text-xs text-muted-foreground">
+                      Doesn't match the photo? Edit a figure below before confirming.
+                    </span>
+                  )}
+                </div>
                 <Badge variant={STATUS_LABEL[preview.status]?.variant ?? "neutral"}>
                   {STATUS_LABEL[preview.status]?.label ?? preview.status}
                 </Badge>
               </div>
 
-              <Table>
+              <div className="grid gap-4 sm:grid-cols-[minmax(0,2fr)_3fr]">
+                {file && (
+                  <div className="overflow-hidden rounded-md border border-border bg-muted">
+                    <FilePreview file={file} />
+                  </div>
+                )}
+
+                <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Candidate</TableHead>
@@ -351,7 +379,21 @@ function UploadForm() {
                   {preview.vote_records?.map((v) => (
                     <TableRow key={v.id}>
                       <TableCell>{v.candidate_name}</TableCell>
-                      <TableCell className="text-right font-mono tabular-nums">{v.effective_votes}</TableCell>
+                      <TableCell className="text-right">
+                        {preview.status === "draft" ? (
+                          <Input
+                            type="number"
+                            inputMode="numeric"
+                            className="ml-auto h-8 w-24 text-right font-mono tabular-nums"
+                            value={corrections[v.candidate_id] ?? String(v.effective_votes)}
+                            onChange={(e) =>
+                              setCorrections((c) => ({ ...c, [v.candidate_id]: e.target.value }))
+                            }
+                          />
+                        ) : (
+                          <span className="font-mono tabular-nums">{v.effective_votes}</span>
+                        )}
+                      </TableCell>
                       <TableCell className="text-right font-mono tabular-nums">
                         <span className={v.field_confidence < 85 ? "text-warning" : "text-primary"}>
                           {v.field_confidence.toFixed(0)}%
@@ -372,7 +414,8 @@ function UploadForm() {
                     <TableCell />
                   </TableRow>
                 </TableBody>
-              </Table>
+                </Table>
+              </div>
 
               {preview.warnings.length > 0 && (
                 <div className="rounded-md border border-warning/30 bg-warning/10 p-3 text-sm text-warning">

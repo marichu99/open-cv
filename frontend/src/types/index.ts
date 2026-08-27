@@ -56,9 +56,12 @@ export interface ElectivePosition {
   level: PositionLevel;
 }
 
+export type GroupingLevel = "county" | "constituency" | "ward" | "station";
+
 export interface PositionWithData extends ElectivePosition {
   has_data: boolean;
   scopes: { id: string; name: string }[];
+  grouping_levels: GroupingLevel[];
 }
 
 export interface Candidate {
@@ -139,7 +142,36 @@ export interface TimeseriesPoint {
   cumulative: Record<string, number>;
 }
 
+export type TimeseriesGranularity = "second" | "minute" | "hour" | "day";
+
 export interface Timeseries {
   candidates: { candidate_id: string; full_name: string }[];
   series: TimeseriesPoint[];
+  granularity: TimeseriesGranularity;
+}
+
+export interface StationTally {
+  station_id: string;
+  station_name: string;
+  reported_at: string | null;
+  votes: Record<string, number>;
+  total_votes_cast: number | null;
+  rejected_ballots: number | null;
+}
+
+export interface VotesByStation {
+  candidates: { candidate_id: string; full_name: string }[];
+  stations: StationTally[];
+}
+
+export interface GroupTally {
+  group_id: string;
+  group_name: string;
+  votes: Record<string, number>;
+}
+
+export interface VotesByGroup {
+  candidates: { candidate_id: string; full_name: string }[];
+  level: GroupingLevel;
+  groups: GroupTally[];
 }

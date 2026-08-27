@@ -1,7 +1,14 @@
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Tooltip } from "recharts";
-import type { Timeseries } from "@/types";
+import type { Timeseries, TimeseriesGranularity } from "@/types";
 
 const COLORS = ["#1e6f57", "#2b3a55", "#9c6b24", "#6b4c7a"];
+
+function formatBucket(iso: string, granularity: TimeseriesGranularity): string {
+  const date = new Date(iso);
+  if (granularity === "day") return date.toLocaleDateString([], { month: "short", day: "numeric" });
+  if (granularity === "second") return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
 
 export function TimeSeriesChart({ data }: { data: Timeseries }) {
   if (data.series.length === 0) {
@@ -9,7 +16,7 @@ export function TimeSeriesChart({ data }: { data: Timeseries }) {
   }
 
   const rows = data.series.map((point) => ({
-    time: new Date(point.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    time: formatBucket(point.timestamp, data.granularity),
     ...Object.fromEntries(data.candidates.map((c) => [c.full_name, point.cumulative[c.candidate_id] ?? 0])),
   }));
 

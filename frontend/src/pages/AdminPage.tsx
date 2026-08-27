@@ -9,8 +9,8 @@ import { ReviewDialog } from "@/components/admin/ReviewDialog";
 import type { FormSubmission, SubmissionStatus } from "@/types";
 
 const STATUS_OPTIONS: { value: SubmissionStatus | "all" | "discrepancies"; label: string }[] = [
-  { value: "pending_review", label: "Pending review" },
   { value: "discrepancies", label: "Discrepancies (flagged)" },
+  { value: "pending_review", label: "Pending review (legacy)" },
   { value: "auto_approved", label: "Auto-approved" },
   { value: "manually_approved", label: "Manually approved" },
   { value: "rejected", label: "Rejected" },
@@ -28,7 +28,7 @@ const STATUS_VARIANT: Record<string, "success" | "warning" | "destructive" | "ne
 };
 
 export function AdminPage() {
-  const [status, setStatus] = useState<string>("pending_review");
+  const [status, setStatus] = useState<string>("discrepancies");
   const [submissions, setSubmissions] = useState<FormSubmission[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
 
@@ -37,7 +37,7 @@ export function AdminPage() {
       status === "all"
         ? {}
         : status === "discrepancies"
-        ? { status: "pending_review", has_warnings: "true" }
+        ? { has_warnings: "true" }
         : { status };
     api.get<FormSubmission[]>("/api/submissions", { params }).then((res) => setSubmissions(res.data));
   }, [status]);
@@ -49,7 +49,10 @@ export function AdminPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-semibold">Moderation queue</h1>
-          <p className="text-sm text-muted-foreground">Review flagged submissions, correct misreads, approve or reject.</p>
+          <p className="text-sm text-muted-foreground">
+            Submissions count toward the tally the moment an agent submits — this grid is for spot-checking forms the
+            model flagged (ambiguous reads, mismatched totals, low confidence) and correcting them if needed.
+          </p>
         </div>
         <Select value={status} onValueChange={setStatus}>
           <SelectTrigger className="w-56">
