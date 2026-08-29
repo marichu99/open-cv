@@ -79,6 +79,19 @@ def create_draft():
         station_id=station.id, form_type=form_type, image_sha256=sha256
     ).first()
     if existing:
+        try:
+            os.remove(image_path)
+        except OSError:
+            pass
+        if existing.status == "draft" and str(existing.agent_id) == get_jwt_identity():
+            # Not a fresh duplicate — the agent's own still-unconfirmed draft
+            # from an earlier attempt at this exact station (e.g. the app was
+            # closed or refreshed before they hit "Confirm & submit"). With
+            # nothing else identifying it client-side, re-picking the same
+            # photo is how they'd naturally retry — hand the draft back
+            # instead of dead-ending them on a "duplicate" error they have no
+            # way to act on.
+            return jsonify(existing.to_dict())
         raise ApiError("This exact image has already been uploaded for this station/form", status_code=409)
 
     service = get_extraction_service(current_app.config["CV_BACKEND"])
