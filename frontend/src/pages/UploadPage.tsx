@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { Loader2 } from "lucide-react";
+import { Camera, FileUp, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { useCounties, useConstituencies, useWards, useStations } from "@/lib/hooks";
@@ -100,6 +100,8 @@ function UploadForm() {
   const [preview, setPreview] = useState<FormSubmission | null>(null);
   const [corrections, setCorrections] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const counties = useCounties();
   const constituencies = useConstituencies(countyId);
@@ -182,6 +184,10 @@ function UploadForm() {
     setFile(null);
     setPreview(null);
     setCorrections({});
+    // Clear both inputs' values so re-picking the exact same photo (e.g. a
+    // retake that looks identical to the browser) still fires onChange.
+    if (cameraInputRef.current) cameraInputRef.current.value = "";
+    if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
   return (
@@ -317,16 +323,54 @@ function UploadForm() {
         <CardContent className="flex flex-col gap-5">
           {!preview && (
             <div className="relative flex flex-col gap-3">
-              <Label htmlFor="image">Form photo or PDF</Label>
-              <Input
-                id="image"
+              <Label>Form photo or PDF</Label>
+
+              {/* Two separate inputs, not one shared accept list: mixing
+                  "image/*,application/pdf" with capture makes iOS/Android
+                  fall back to a generic chooser instead of opening the
+                  camera directly. Kept apart so "Take photo" always jumps
+                  straight into the camera app. */}
+              <input
+                ref={cameraInputRef}
+                id="camera-capture"
                 type="file"
-                accept="image/*,application/pdf"
+                accept="image/*"
                 capture="environment"
+                className="hidden"
                 onChange={(e) => setFile(e.target.files?.[0] ?? null)}
               />
+              <input
+                ref={fileInputRef}
+                id="file-pick"
+                type="file"
+                accept="image/*,application/pdf"
+                className="hidden"
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              />
+
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="flex-1 gap-2"
+                  onClick={() => cameraInputRef.current?.click()}
+                >
+                  <Camera size={16} />
+                  Take photo
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="flex-1 gap-2"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <FileUp size={16} />
+                  Choose file
+                </Button>
+              </div>
               <p className="text-xs text-muted-foreground">
-                A PDF is converted to an image automatically — only the first page is used.
+                "Take photo" opens your camera directly. Use "Choose file" for a scanned PDF or a photo already saved to
+                your phone — a PDF is converted to an image automatically, using only its first page.
               </p>
 
               {file && <FilePreview file={file} />}
