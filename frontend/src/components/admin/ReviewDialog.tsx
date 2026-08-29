@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { api, API_URL, getToken } from "@/lib/api";
+import { api, fetchSubmissionImageBlob } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,10 +37,7 @@ export function ReviewDialog({
       setNotes("");
     });
     // The image endpoint requires a bearer token, so fetch it as a blob rather than <img src>.
-    fetch(`${API_URL}/api/submissions/${submissionId}/image`, {
-      headers: { Authorization: `Bearer ${getToken()}` },
-    })
-      .then((r) => r.blob())
+    fetchSubmissionImageBlob(submissionId)
       .then((blob) => setImageSrc(URL.createObjectURL(blob)))
       .catch(() => setImageSrc(null));
   }, [submissionId]);

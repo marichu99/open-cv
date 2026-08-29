@@ -106,6 +106,9 @@ export interface FormSubmission {
   id: string;
   station_id: string;
   station_name: string;
+  ward_name: string | null;
+  constituency_name: string | null;
+  county_name: string | null;
   agent_id: string;
   agent_name: string;
   position_id: string;

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { api } from "@/lib/api";
-import { useCounties, useConstituencies, useWards, useStations } from "@/lib/hooks";
+import { ChevronRight, ExternalLink } from "lucide-react";
+import { api, fetchSubmissionImageBlob } from "@/lib/api";
+import { useCounties, useConstituencies, useWards, useStations, useUploadsLog } from "@/lib/hooks";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
@@ -10,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { positionLabel, cn } from "@/lib/utils";
-import type { AgentWithAssignment, Candidate, ElectivePosition, PositionLevel } from "@/types";
+import type { AgentWithAssignment, Candidate, ElectivePosition, FormSubmission, PositionLevel } from "@/types";
 
 function AssignmentDialog({
   agent,
@@ -431,6 +432,216 @@ function CandidatesCard() {
   );
 }
 
+const UPLOAD_STATUS_OPTIONS: { value: string; label: string }[] = [
+  { value: "all", label: "All statuses" },
+  { value: "draft", label: "Draft (not yet finalized)" },
+  { value: "auto_approved", label: "Auto-approved" },
+  { value: "manually_approved", label: "Manually approved" },
+  { value: "rejected", label: "Rejected" },
+  { value: "duplicate", label: "Duplicate" },
+];
+
+const UPLOAD_STATUS_VARIANT: Record<string, "success" | "warning" | "destructive" | "neutral"> = {
+  auto_approved: "success",
+  manually_approved: "success",
+  pending_review: "warning",
+  rejected: "destructive",
+  duplicate: "destructive",
+  draft: "neutral",
+};
+
+interface LocationGroup {
+  name: string;
+  submissions: FormSubmission[];
+  children: LocationGroup[];
+}
+
+function sortedEntries<T>(m: Map<string, T>) {
+  return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+/** County → constituency → ward → polling station, built purely from the
+ * submissions actually returned — so only locations with real uploads show
+ * up, rather than every one of Kenya's ~24.6k stations. */
+function groupByLocation(subs: FormSubmission[]): LocationGroup[] {
+  const counties = new Map<string, Map<string, Map<string, Map<string, FormSubmission[]>>>>();
+
+  for (const s of subs) {
+    const county = s.county_name ?? "Unknown county";
+    const constituency = s.constituency_name ?? "Unknown constituency";
+    const ward = s.ward_name ?? "Unknown ward";
+    const station = s.station_name ?? "Unknown station";
+
+    const constituencies = counties.get(county) ?? new Map();
+    counties.set(county, constituencies);
+    const wards = constituencies.get(constituency) ?? new Map();
+    constituencies.set(constituency, wards);
+    const stations = wards.get(ward) ?? new Map();
+    wards.set(ward, stations);
+    const list = stations.get(station) ?? [];
+    list.push(s);
+    stations.set(station, list);
+  }
+
+  return sortedEntries(counties).map(([countyName, constituencies]) => ({
+    name: countyName,
+    submissions: [],
+    children: sortedEntries(constituencies).map(([constituencyName, wards]) => ({
+      name: constituencyName,
+      submissions: [],
+      children: sortedEntries(wards).map(([wardName, stations]) => ({
+        name: wardName,
+        submissions: [],
+        children: sortedEntries(stations).map(([stationName, list]) => ({
+          name: stationName,
+          submissions: [...list].sort((a, b) => b.uploaded_at.localeCompare(a.uploaded_at)),
+          children: [],
+        })),
+      })),
+    })),
+  }));
+}
+
+function countUploads(group: LocationGroup): number {
+  return group.submissions.length + group.children.reduce((n, c) => n + countUploads(c), 0);
+}
+
+const LOCATION_LEVEL_LABELS = ["County", "Constituency", "Ward", "Polling station"];
+
+/** Opens the submission's original photo in a new tab. */
+async function viewSubmissionDocument(id: string) {
+  try {
+    const blob = await fetchSubmissionImageBlob(id);
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank", "noopener,noreferrer");
+    // The new tab needs the blob URL to still resolve after it opens —
+    // revoke it once that's had time to happen, not immediately.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : "Could not load the document");
+  }
+}
+
+function LocationGroupNode({ group, depth }: { group: LocationGroup; depth: number }) {
+  const total = countUploads(group);
+  const levelLabel = LOCATION_LEVEL_LABELS[depth];
+
+  return (
+    <details className="group rounded-md border border-border" open={depth === 0}>
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-sm font-medium hover:bg-muted">
+        <span className="flex items-center gap-2">
+          <ChevronRight size={14} className="shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />
+          {group.name}
+          {levelLabel && <Badge variant="neutral">{levelLabel}</Badge>}
+        </span>
+        <Badge variant="neutral">
+          {total} upload{total === 1 ? "" : "s"}
+        </Badge>
+      </summary>
+      <div className="flex flex-col gap-2 border-t border-border p-3 pl-6">
+        {group.children.map((child) => (
+          <LocationGroupNode key={child.name} group={child} depth={depth + 1} />
+        ))}
+        {group.children.length === 0 && (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Agent</TableHead>
+                <TableHead>Form</TableHead>
+                <TableHead>Uploaded at</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Document</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {group.submissions.map((s) => (
+                <TableRow key={s.id}>
+                  <TableCell className="font-medium">{s.agent_name}</TableCell>
+                  <TableCell>{s.form_type}</TableCell>
+                  <TableCell className="text-muted-foreground">{new Date(s.uploaded_at).toLocaleString()}</TableCell>
+                  <TableCell>
+                    <Badge variant={UPLOAD_STATUS_VARIANT[s.status] ?? "neutral"}>{s.status.replace("_", " ")}</Badge>
+                  </TableCell>
+                  <TableCell>
+                    <button
+                      type="button"
+                      onClick={() => viewSubmissionDocument(s.id)}
+                      className="inline-flex items-center gap-1 text-primary hover:underline"
+                    >
+                      <ExternalLink size={14} />
+                      View
+                    </button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function UploadsCard() {
+  const [status, setStatus] = useState("all");
+  const [search, setSearch] = useState("");
+  const { data: submissions } = useUploadsLog(status);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return submissions;
+    return submissions.filter((s) =>
+      [s.agent_name, s.station_name, s.ward_name, s.constituency_name, s.county_name].some((field) =>
+        field?.toLowerCase().includes(q)
+      )
+    );
+  }, [submissions, search]);
+
+  const groups = useMemo(() => groupByLocation(filtered), [filtered]);
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <CardTitle>Field uploads</CardTitle>
+            <CardDescription>
+              Every form photo a field agent has sent in, grouped by county, constituency, ward and polling station —
+              expand a group to see exactly who uploaded it and when.
+            </CardDescription>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search agent or location…"
+              className="w-56"
+            />
+            <Select value={status} onValueChange={setStatus}>
+              <SelectTrigger className="w-56">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {UPLOAD_STATUS_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2">
+        {groups.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">No uploads yet.</p>}
+        {groups.map((group) => (
+          <LocationGroupNode key={group.name} group={group} depth={0} />
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function CampaignManagerPage() {
   const [agents, setAgents] = useState<AgentWithAssignment[]>([]);
   const [activeAgent, setActiveAgent] = useState<AgentWithAssignment | null>(null);
@@ -515,6 +726,8 @@ export function CampaignManagerPage() {
       </Card>
 
       <AssignmentDialog agent={activeAgent} onClose={() => setActiveAgent(null)} onSaved={load} />
+
+      <UploadsCard />
 
       <CandidatesCard />
     </div>

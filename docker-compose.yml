@@ -20,6 +20,10 @@ services:
     env_file: ./backend/.env
     environment:
       DATABASE_URL: postgresql+psycopg2://tally333:tally333@db:5432/tally333
+      # .env's GCS_CREDENTIALS_JSON is a host path (the sibling leviathan
+      # project's service account) — doesn't exist inside this container,
+      # so it's remapped to where the volume below actually mounts it.
+      GCS_CREDENTIALS_JSON: /secrets/gcs-service-account.json
     ports:
       - "8000:8080"  # 5000 clashes with AirPlay/other local services on many machines
     depends_on:
@@ -27,6 +31,11 @@ services:
         condition: service_healthy
     volumes:
       - tally333_uploads:/app/instance/uploads
+      # :ro,z — Fedora's SELinux blocks a bind-mounted file with the wrong
+      # context otherwise (denied even though the host file mode is 644).
+      # Lowercase z (shared label), not Z (private/exclusive) — this same
+      # file is also read directly by the sibling leviathan project.
+      - /home/mabera/personal/leviathan/backend/service_account.json:/secrets/gcs-service-account.json:ro,z
 
   frontend:
     build:

@@ -55,10 +55,16 @@ class FormSubmission(db.Model):
     )
 
     def to_dict(self, include_votes=True):
+        ward = self.station.ward if self.station else None
+        constituency = ward.constituency if ward else None
+        county = constituency.county if constituency else None
         data = {
             "id": str(self.id),
             "station_id": str(self.station_id),
             "station_name": self.station.name if self.station else None,
+            "ward_name": ward.name if ward else None,
+            "constituency_name": constituency.name if constituency else None,
+            "county_name": county.name if county else None,
             "agent_id": str(self.agent_id),
             "agent_name": self.agent.full_name if self.agent else None,
             "position_id": str(self.position_id),

@@ -13,6 +13,7 @@ import type {
   VotesByStation,
   VotesByGroup,
   GroupingLevel,
+  FormSubmission,
 } from "@/types";
 
 // Lazy, cascading geography fetches — at national scale (47 counties, 290
@@ -121,6 +122,15 @@ export function useVotesByStation(positionId: string | null, scopeId: string | n
     tallyPath("/api/tally/by_station", positionId, scopeId, scopeRequired),
     { candidates: [], stations: [] },
   );
+}
+
+/** Every field-agent upload, freshest first (backend caps it at 200) — the
+ * campaign manager's "who uploaded what, from where, when" log. Live-updates
+ * the same way the tally views do, plus a poll, since a fresh draft upload
+ * doesn't itself emit `tally_updated` (only finalizing one does). */
+export function useUploadsLog(status?: string) {
+  const path = status && status !== "all" ? `/api/submissions?status=${status}` : "/api/submissions";
+  return useLiveResource<FormSubmission[]>(path, []);
 }
 
 export function useVotesByGroup(

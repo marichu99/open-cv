@@ -8,7 +8,7 @@ from app.extensions import db, socketio
 from app.models import Agent, PollingStation, FormSubmission, VoteRecord, VerificationLog
 from app.models.submission import FORM_LEVEL_LETTERS, TALLIED_STATUSES
 from app.services.cv_pipeline import get_extraction_service
-from app.services.storage import LocalStorage
+from app.services.storage import LocalStorage, GCSStorage
 from app.services.dedup import find_existing_approved, supersede
 from app.services.pdf import is_pdf, pdf_first_page_to_image
 from app.services.candidates import get_or_create_candidate, geo_scope_for_position
@@ -97,6 +97,12 @@ def create_draft():
             "upload the form for the station you selected.",
             status_code=422,
         )
+
+    if not current_app.config["USE_LOCAL_STORAGE"]:
+        gcs = GCSStorage(current_app.config["GCS_BUCKET_NAME"], current_app.config["GCS_CREDENTIALS_JSON"])
+        gcs_path = gcs.upload(image_path, station.id, form_type)
+        os.remove(image_path)
+        image_path = gcs_path
 
     submission = FormSubmission(
         station_id=station.id,
@@ -196,7 +202,7 @@ def finalize(submission_id):
 
 
 @bp.get("")
-@role_required("coordinator", "admin")
+@role_required("campaign_manager", "coordinator", "admin")
 def list_submissions():
     q = FormSubmission.query
     status = request.args.get("status")
@@ -232,6 +238,18 @@ def get_image(submission_id):
     submission = db.session.get(FormSubmission, submission_id)
     if not submission:
         raise ApiError("Not found", status_code=404)
-    if str(submission.agent_id) != get_jwt_identity() and get_jwt().get("role") not in ("coordinator", "admin"):
+    if str(submission.agent_id) != get_jwt_identity() and get_jwt().get("role") not in (
+        "campaign_manager", "coordinator", "admin",
+    ):
         raise ApiError("Forbidden", status_code=403)
+    if submission.image_path.startswith(GCSStorage.PREFIX):
+        # Not a redirect: a signed URL's auth is in its query string, but
+        # browsers forward this endpoint's own Authorization header across a
+        # cross-origin redirect too — GCS then tries to use *that* (an app
+        # JWT, meaningless to GCS) for its own auth and rejects the request
+        # before ever consulting the query-string signature. Handing the URL
+        # back as JSON keeps this call same-origin (JWT auth works fine
+        # here) and lets the client fetch the actual bytes with no headers.
+        gcs = GCSStorage(current_app.config["GCS_BUCKET_NAME"], current_app.config["GCS_CREDENTIALS_JSON"])
+        return jsonify(url=gcs.signed_url(submission.image_path))
     return send_file(submission.image_path)

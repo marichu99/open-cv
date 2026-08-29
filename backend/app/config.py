@@ -18,6 +18,12 @@ class Config:
     UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "instance/uploads")
     MAX_CONTENT_LENGTH = 15 * 1024 * 1024  # 15MB per upload
 
+    # Google Cloud Storage — form photos, once USE_LOCAL_STORAGE is off. Same
+    # GCP project/credentials as the sibling leviathan project, own bucket.
+    GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME", "tally333-docs")
+    GCS_CREDENTIALS_JSON = os.environ.get("GCS_CREDENTIALS_JSON")  # path to service-account JSON
+    USE_LOCAL_STORAGE = os.environ.get("USE_LOCAL_STORAGE", "true").lower() in ("1", "true", "yes")
+
     CV_BACKEND = os.environ.get("CV_BACKEND", "mock")
     CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.85"))
 
