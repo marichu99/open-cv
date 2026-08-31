@@ -78,7 +78,7 @@ def test_positions_endpoint_lists_all_six(client, geo):
     assert names == {"president", "governor", "senator", "woman_representative", "member_of_parliament", "mca"}
 
 
-def _seed_approved(app, position_id, candidate_id, station_id, finalized_at, votes, sha):
+def _seed_approved(app, position_id, candidate_id, station_id, finalized_at, votes, sha, stream_number=1):
     from app.extensions import db
     from app.models import Agent, ElectivePosition, FormSubmission, VoteRecord
 
@@ -92,7 +92,7 @@ def _seed_approved(app, position_id, candidate_id, station_id, finalized_at, vot
         submission = FormSubmission(
             station_id=station_id, agent_id=agent.id, position_id=position_id, form_type="34A",
             image_path="x", image_sha256=sha, status="auto_approved", total_votes_cast=votes,
-            rejected_ballots=0, ocr_confidence_avg=95, finalized_at=finalized_at,
+            rejected_ballots=0, ocr_confidence_avg=95, finalized_at=finalized_at, stream_number=stream_number,
         )
         db.session.add(submission)
         db.session.flush()
@@ -165,6 +165,35 @@ def test_votes_by_station_lists_one_row_per_station_most_recent_first(client, ap
     assert station_names_in_order == ["Second Station", "Nyansiongo Pri Stream 1"]  # most recent first
     assert body["stations"][0]["votes"][candidate_id] == 50
     assert body["stations"][1]["votes"][candidate_id] == 100
+
+
+def test_votes_by_station_shows_a_separate_row_per_stream_of_the_same_station(client, app, geo):
+    """Two streams of the same polling station both tallied — see
+    test_submissions.py's test_different_streams_of_the_same_station_both_count_instead_of_superseding
+    for the finalize()-level guarantee this display relies on."""
+    from app.extensions import db
+    from app.models import Candidate
+
+    position_id = geo["positions"]["president"]
+    with app.app_context():
+        candidate = Candidate(position_id=position_id, full_name="Candidate A", normalized_name="CANDIDATE A")
+        db.session.add(candidate)
+        db.session.commit()
+        candidate_id = str(candidate.id)
+
+    older = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    newer = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    _seed_approved(app, position_id, candidate_id, geo["station_id"], older, 100, "stream1", stream_number=1)
+    _seed_approved(app, position_id, candidate_id, geo["station_id"], newer, 50, "stream3", stream_number=3)
+
+    resp = client.get(f"/api/tally/by_station?position_id={position_id}")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert len(body["stations"]) == 2
+    stream_numbers = {s["stream_number"] for s in body["stations"]}
+    assert stream_numbers == {1, 3}
+    for s in body["stations"]:
+        assert s["station_id"] == geo["station_id"]
 
 
 def test_valid_groupings_depend_on_position_level(app, geo):
