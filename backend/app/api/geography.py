@@ -2,6 +2,7 @@ from flask import Blueprint, jsonify, request
 
 from app.extensions import db
 from app.models import County, Constituency, Ward, PollingStation
+from app.utils.caching import cache_control
 from app.utils.errors import ApiError
 
 bp = Blueprint("geography", __name__, url_prefix="/api/geography")
@@ -11,13 +12,20 @@ bp = Blueprint("geography", __name__, url_prefix="/api/geography")
 # hierarchy in one response doesn't scale. Cascading selects fetch each
 # level lazily as the parent is chosen — see frontend/src/lib/hooks.ts.
 
+# Static reference data — only ever changes via the one-time import-geography
+# CLI command, never at request time, so a long cache is safe. Unauthenticated
+# routes only (see app/utils/caching.py's docstring for why that matters).
+_REFERENCE_DATA = cache_control("public, max-age=3600")
+
 
 @bp.get("/counties")
+@_REFERENCE_DATA
 def list_counties():
     return jsonify([c.to_dict() for c in County.query.order_by(County.name)])
 
 
 @bp.get("/constituencies")
+@_REFERENCE_DATA
 def list_constituencies():
     county_id = request.args.get("county_id")
     q = Constituency.query
@@ -27,6 +35,7 @@ def list_constituencies():
 
 
 @bp.get("/wards")
+@_REFERENCE_DATA
 def list_wards():
     constituency_id = request.args.get("constituency_id")
     q = Ward.query
@@ -36,6 +45,7 @@ def list_wards():
 
 
 @bp.get("/stations")
+@_REFERENCE_DATA
 def list_stations():
     ward_id = request.args.get("ward_id")
     q = PollingStation.query
@@ -45,6 +55,7 @@ def list_stations():
 
 
 @bp.get("/stations/<uuid:station_id>/ancestors")
+@_REFERENCE_DATA
 def station_ancestors(station_id):
     """Resolves a station's full county/constituency/ward chain — used to
     prefill a cascading select from just a station id (e.g. an agent's

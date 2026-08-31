@@ -3,9 +3,17 @@ from flask import Blueprint, jsonify, request
 from app.extensions import db
 from app.models import ElectivePosition
 from app.services import tally_service
+from app.utils.caching import cache_control
 from app.utils.errors import ApiError
 
 bp = Blueprint("tally", __name__, url_prefix="/api/tally")
+
+# Live results — unlike geography/positions, this changes as submissions
+# come in. A short cache tolerates a few seconds of staleness (per
+# docs/DEPLOYMENT.md's "Cache the read-only path at the edge") in exchange
+# for absorbing traffic spikes at the CDN instead of hitting Postgres per
+# request. Unauthenticated routes only.
+_LIVE_RESULTS = cache_control("public, max-age=5")
 
 
 def _load_position():
@@ -19,6 +27,7 @@ def _load_position():
 
 
 @bp.get("/positions")
+@_LIVE_RESULTS
 def positions_with_data():
     """Positions that have at least one real submission so far, plus every
     position's scope list — drives the dashboard's position/scope selector."""
@@ -35,6 +44,7 @@ def positions_with_data():
 
 
 @bp.get("/summary")
+@_LIVE_RESULTS
 def summary():
     position = _load_position()
     scope_id = request.args.get("scope_id")
@@ -44,6 +54,7 @@ def summary():
 
 
 @bp.get("/progress")
+@_LIVE_RESULTS
 def progress():
     position = _load_position()
     scope_id = request.args.get("scope_id")
@@ -51,6 +62,7 @@ def progress():
 
 
 @bp.get("/timeseries")
+@_LIVE_RESULTS
 def timeseries():
     position = _load_position()
     scope_id = request.args.get("scope_id")
@@ -59,6 +71,7 @@ def timeseries():
 
 
 @bp.get("/by_station")
+@_LIVE_RESULTS
 def by_station():
     position = _load_position()
     scope_id = request.args.get("scope_id")
@@ -68,6 +81,7 @@ def by_station():
 
 
 @bp.get("/by_group")
+@_LIVE_RESULTS
 def by_group():
     position = _load_position()
     scope_id = request.args.get("scope_id")
