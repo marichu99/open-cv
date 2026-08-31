@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { useState } from "react";
+import { useSubmissionsFeed } from "@/lib/hooks";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ReviewDialog } from "@/components/admin/ReviewDialog";
-import type { FormSubmission, SubmissionStatus } from "@/types";
+import type { SubmissionStatus } from "@/types";
 
 const STATUS_OPTIONS: { value: SubmissionStatus | "all" | "discrepancies"; label: string }[] = [
   { value: "discrepancies", label: "Discrepancies (flagged)" },
@@ -29,20 +29,15 @@ const STATUS_VARIANT: Record<string, "success" | "warning" | "destructive" | "ne
 
 export function AdminPage() {
   const [status, setStatus] = useState<string>("discrepancies");
-  const [submissions, setSubmissions] = useState<FormSubmission[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
 
-  const load = useCallback(() => {
-    const params =
-      status === "all"
-        ? {}
-        : status === "discrepancies"
-        ? { has_warnings: "true" }
-        : { status };
-    api.get<FormSubmission[]>("/api/submissions", { params }).then((res) => setSubmissions(res.data));
-  }, [status]);
-
-  useEffect(() => load(), [load]);
+  const params: Record<string, string> =
+    status === "all"
+      ? {}
+      : status === "discrepancies"
+      ? { has_warnings: "true" }
+      : { status };
+  const { data: submissions, refresh: load } = useSubmissionsFeed(params);
 
   return (
     <div className="flex flex-col gap-6">
