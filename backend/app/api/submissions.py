@@ -1,18 +1,17 @@
+import mimetypes
 import os
 from datetime import datetime, timezone
 
-from flask import Blueprint, request, jsonify, current_app, send_file
+from flask import Blueprint, request, jsonify, current_app, send_file, Response
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 
 from app.extensions import db, socketio
 from app.models import Agent, PollingStation, FormSubmission, VoteRecord, VerificationLog
 from app.models.submission import FORM_LEVEL_LETTERS, TALLIED_STATUSES
-from app.services.cv_pipeline import get_extraction_service
-from app.services.storage import LocalStorage
+from app.services.storage import LocalStorage, GCSStorage
 from app.services.dedup import find_existing_approved, supersede
+from app.services.extraction_queue import enqueue_extraction
 from app.services.pdf import is_pdf, pdf_first_page_to_image
-from app.services.candidates import get_or_create_candidate, geo_scope_for_position
-from app.services.location_check import location_mismatches
 from app.services.image_quality import looks_blank
 from app.utils.errors import ApiError
 from app.utils.rbac import role_required
@@ -79,24 +78,21 @@ def create_draft():
         station_id=station.id, form_type=form_type, image_sha256=sha256
     ).first()
     if existing:
-        raise ApiError("This exact image has already been uploaded for this station/form", status_code=409)
+        if existing.status not in ("draft", "processing"):
+            raise ApiError("This exact image has already been uploaded for this station/form", status_code=409)
+        # Neither a draft nor a still-processing submission is "uploaded"
+        # until /finalize is called — this is an abandoned attempt from
+        # earlier (e.g. the agent hit Retake, or a task is still in flight)
+        # that was never confirmed. The DB's unique constraint on
+        # (station_id, form_type, image_sha256) means the new upload can't
+        # coexist with it, so replace it rather than block.
+        db.session.delete(existing)
+        db.session.flush()
 
-    service = get_extraction_service(current_app.config["CV_BACKEND"])
-    result = service.extract(image_path, position, form_type)
-
-    mismatches = location_mismatches(result.detected_location, station)
-    if mismatches:
-        try:
-            os.remove(image_path)
-        except OSError:
-            pass
-        raise ApiError(
-            "This photo doesn't look like it's for the station you selected — "
-            + "; ".join(mismatches)
-            + ". Please pick the matching county/constituency/ward/polling station, or "
-            "upload the form for the station you selected.",
-            status_code=422,
-        )
+    if current_app.config["STORAGE_BACKEND"] == "gcs":
+        object_name = GCSStorage(current_app.config["GCS_BUCKET_NAME"]).upload(image_path, sha256)
+        os.remove(image_path)
+        image_path = object_name
 
     submission = FormSubmission(
         station_id=station.id,
@@ -106,29 +102,19 @@ def create_draft():
         image_path=image_path,
         image_sha256=sha256,
         captured_at=datetime.fromisoformat(captured_at_raw) if captured_at_raw else None,
-        total_votes_cast=result.total_votes_cast,
-        rejected_ballots=result.rejected_ballots,
-        ocr_confidence_avg=round(result.overall_confidence * 100, 2),
-        status="draft",
-        warnings=result.warnings,
+        status="processing",
     )
     db.session.add(submission)
-    db.session.flush()
-
-    geo_scope = geo_scope_for_position(position, station)
-    for field in result.votes:
-        candidate = get_or_create_candidate(position, field.candidate_name, field.party, **geo_scope)
-        db.session.add(
-            VoteRecord(
-                submission_id=submission.id,
-                candidate_id=candidate.id,
-                votes_detected=field.votes,
-                field_confidence=round(field.confidence * 100, 2),
-            )
-        )
     db.session.commit()
 
-    return jsonify(submission.to_dict()), 201
+    # Runs synchronously inline unless a Cloud Tasks queue is configured
+    # (app/services/extraction_queue.py) — either way, submission.to_dict()
+    # below correctly reflects whatever state it's in by the time this
+    # returns: already-resolved "draft"/"extraction_failed" when run
+    # inline, or still "processing" when genuinely dispatched to a queue.
+    enqueue_extraction(str(submission.id))
+
+    return jsonify(submission.to_dict()), 202
 
 
 @bp.post("/<uuid:submission_id>/finalize")
@@ -139,6 +125,11 @@ def finalize(submission_id):
         raise ApiError("Not found", status_code=404)
     if str(submission.agent_id) != get_jwt_identity() and get_jwt().get("role") not in ("coordinator", "admin"):
         raise ApiError("Forbidden", status_code=403)
+    if submission.status == "processing":
+        raise ApiError("Still processing — try again shortly", status_code=409)
+    if submission.status == "extraction_failed":
+        message = (submission.warnings or ["Extraction failed for this photo — please retake it."])[0]
+        raise ApiError(message, status_code=422)
     if submission.status != "draft":
         raise ApiError("Submission has already been finalized")
 
@@ -165,7 +156,9 @@ def finalize(submission_id):
         )
 
     threshold = current_app.config["CONFIDENCE_THRESHOLD"]
-    duplicate = find_existing_approved(submission.station_id, submission.form_type, submission.id)
+    duplicate = find_existing_approved(
+        submission.station_id, submission.form_type, submission.stream_number, submission.id
+    )
 
     # The agent has already seen the extracted figures and had the chance to
     # correct them (see the `corrections` handling above), so their
@@ -234,4 +227,8 @@ def get_image(submission_id):
         raise ApiError("Not found", status_code=404)
     if str(submission.agent_id) != get_jwt_identity() and get_jwt().get("role") not in ("coordinator", "admin"):
         raise ApiError("Forbidden", status_code=403)
+    if current_app.config["STORAGE_BACKEND"] == "gcs":
+        data = GCSStorage(current_app.config["GCS_BUCKET_NAME"]).download_bytes(submission.image_path)
+        mimetype = mimetypes.guess_type(submission.image_path)[0] or "application/octet-stream"
+        return Response(data, mimetype=mimetype)
     return send_file(submission.image_path)

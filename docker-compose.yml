@@ -15,16 +15,24 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"  # host 6380 to avoid clashing with a local Redis install
+
   backend:
     build: ./backend
     env_file: ./backend/.env
     environment:
       DATABASE_URL: postgresql+psycopg2://tally333:tally333@db:5432/tally333
+      REDIS_URL: redis://redis:6379/0
     ports:
       - "8000:8080"  # 5000 clashes with AirPlay/other local services on many machines
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started
     volumes:
       - tally333_uploads:/app/instance/uploads
 
@@ -33,6 +41,7 @@ services:
       context: ./frontend
       args:
         VITE_API_URL: http://localhost:8000
+        VITE_SOCKET_URL: http://localhost:8000
     ports:
       - "5173:80"
     depends_on:

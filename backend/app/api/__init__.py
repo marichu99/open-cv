@@ -1,4 +1,4 @@
-from app.api import auth, geography, candidates, submissions, review, tally, agents, positions
+from app.api import auth, geography, candidates, submissions, review, tally, agents, positions, internal
 
 BLUEPRINTS = (
     auth.bp,
@@ -9,4 +9,5 @@ BLUEPRINTS = (
     tally.bp,
     agents.bp,
     positions.bp,
+    internal.bp,
 )

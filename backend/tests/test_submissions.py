@@ -47,9 +47,9 @@ def test_draft_then_finalize_auto_approves_when_confident(client, app, geo, monk
             result.total_votes_cast = sum(v.votes for v in result.votes) + result.rejected_ballots
             return result
 
-    from app.api import submissions as submissions_api
+    from app.services import extraction as extraction_api
 
-    monkeypatch.setattr(submissions_api, "get_extraction_service", lambda backend: CleanMock())
+    monkeypatch.setattr(extraction_api, "get_extraction_service", lambda backend: CleanMock())
 
     resp = client.post(
         "/api/submissions/draft",
@@ -61,7 +61,7 @@ def test_draft_then_finalize_auto_approves_when_confident(client, app, geo, monk
         headers=_auth_headers(token),
         content_type="multipart/form-data",
     )
-    assert resp.status_code == 201
+    assert resp.status_code == 202
     submission = resp.get_json()
     assert submission["status"] == "draft"
     assert submission["form_type"] == "39A"  # woman_representative's form series + station-level letter
@@ -122,23 +122,80 @@ def test_agent_with_multiple_positions_picks_one_per_upload(client, app, geo):
         headers=_auth_headers(token),
         content_type="multipart/form-data",
     )
-    assert resp.status_code == 201
+    assert resp.status_code == 202
     assert resp.get_json()["form_type"] == "34A"  # president's series, not woman_representative's
 
 
-def test_duplicate_exact_image_rejected(client, app, geo):
+def test_duplicate_exact_image_rejected_after_confirmation(client, app, geo):
+    """Only a *confirmed* (finalized) submission protects an image from
+    re-upload — see test_retaking_an_unconfirmed_draft_replaces_it_instead_of_blocking
+    for why a still-draft one doesn't."""
     token, position_id = _login_agent(client, app, geo=geo)
     payload = {"station_id": geo["station_id"], "position_id": position_id, "image": (fake_image_bytes(), "form.jpg")}
     first = client.post(
         "/api/submissions/draft", data=payload, headers=_auth_headers(token), content_type="multipart/form-data"
     )
-    assert first.status_code == 201
+    assert first.status_code == 202
+    final = client.post(f"/api/submissions/{first.get_json()['id']}/finalize", headers=_auth_headers(token))
+    assert final.status_code == 200
 
     payload2 = {"station_id": geo["station_id"], "position_id": position_id, "image": (fake_image_bytes(), "form.jpg")}
     second = client.post(
         "/api/submissions/draft", data=payload2, headers=_auth_headers(token), content_type="multipart/form-data"
     )
     assert second.status_code == 409
+
+
+def test_retaking_an_unconfirmed_draft_replaces_it_instead_of_blocking(client, app, geo):
+    """A draft is only "uploaded" once /finalize is called (see api/submissions.py's
+    create_draft) — hitting Retake in the UI, or re-uploading the exact same
+    photo before ever confirming it, must not permanently occupy the
+    (station_id, form_type, image_sha256) DB slot forever."""
+    token, position_id = _login_agent(client, app, geo=geo)
+    payload = {"station_id": geo["station_id"], "position_id": position_id, "image": (fake_image_bytes(), "form.jpg")}
+    first = client.post(
+        "/api/submissions/draft", data=payload, headers=_auth_headers(token), content_type="multipart/form-data"
+    )
+    assert first.status_code == 202
+    first_id = first.get_json()["id"]
+
+    payload2 = {"station_id": geo["station_id"], "position_id": position_id, "image": (fake_image_bytes(), "form.jpg")}
+    second = client.post(
+        "/api/submissions/draft", data=payload2, headers=_auth_headers(token), content_type="multipart/form-data"
+    )
+    assert second.status_code == 202
+    assert second.get_json()["id"] != first_id
+
+    assert client.get(f"/api/submissions/{first_id}", headers=_auth_headers(token)).status_code == 404
+
+
+def test_retaking_a_submission_still_stuck_processing_also_replaces_it(client, app, geo):
+    """The synchronous test environment resolves extraction inline, so it
+    never naturally leaves a row sitting at "processing" — this simulates
+    the one real-world case that can't otherwise be exercised here: a
+    Cloud Task still in flight when the agent retakes the same photo."""
+    token, position_id = _login_agent(client, app, geo=geo)
+    payload = {"station_id": geo["station_id"], "position_id": position_id, "image": (fake_image_bytes(), "form.jpg")}
+    first = client.post(
+        "/api/submissions/draft", data=payload, headers=_auth_headers(token), content_type="multipart/form-data"
+    )
+    first_id = first.get_json()["id"]
+
+    from app.extensions import db
+    from app.models import FormSubmission
+
+    with app.app_context():
+        submission = db.session.get(FormSubmission, first_id)
+        submission.status = "processing"
+        db.session.commit()
+
+    payload2 = {"station_id": geo["station_id"], "position_id": position_id, "image": (fake_image_bytes(), "form.jpg")}
+    second = client.post(
+        "/api/submissions/draft", data=payload2, headers=_auth_headers(token), content_type="multipart/form-data"
+    )
+    assert second.status_code == 202
+    assert second.get_json()["id"] != first_id
+    assert client.get(f"/api/submissions/{first_id}", headers=_auth_headers(token)).status_code == 404
 
 
 def test_draft_rejected_when_form_header_doesnt_match_selected_station(client, app, geo, monkeypatch):
@@ -149,7 +206,7 @@ def test_draft_rejected_when_form_header_doesnt_match_selected_station(client, a
     token, position_id = _login_agent(client, app, geo=geo)
 
     from app.services import cv_pipeline
-    from app.api import submissions as submissions_api
+    from app.services import extraction as extraction_api
 
     class WrongStationMock(cv_pipeline.MockExtractionService):
         def extract(self, image_path, position, declared_form_type):
@@ -160,7 +217,7 @@ def test_draft_rejected_when_form_header_doesnt_match_selected_station(client, a
             )
             return result
 
-    monkeypatch.setattr(submissions_api, "get_extraction_service", lambda backend: WrongStationMock())
+    monkeypatch.setattr(extraction_api, "get_extraction_service", lambda backend: WrongStationMock())
 
     resp = client.post(
         "/api/submissions/draft",
@@ -168,22 +225,27 @@ def test_draft_rejected_when_form_header_doesnt_match_selected_station(client, a
         headers=_auth_headers(token),
         content_type="multipart/form-data",
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 202
     body = resp.get_json()
-    assert "constituency" in body["error"]
-    assert "ward" in body["error"]
+    assert body["status"] == "extraction_failed"
+    warnings_text = " ".join(body["warnings"])
+    assert "constituency" in warnings_text
+    assert "ward" in warnings_text
 
+    # Unlike a blank photo (rejected synchronously, no row ever created), a
+    # location mismatch can only be detected after extraction runs — so the
+    # row exists, just resolved to extraction_failed instead of draft.
     from app.models import FormSubmission
 
     with app.app_context():
-        assert FormSubmission.query.count() == 0
+        assert FormSubmission.query.count() == 1
 
 
 def test_draft_succeeds_when_form_header_matches_selected_station(client, app, geo, monkeypatch):
     token, position_id = _login_agent(client, app, geo=geo)
 
     from app.services import cv_pipeline
-    from app.api import submissions as submissions_api
+    from app.services import extraction as extraction_api
 
     class MatchingStationMock(cv_pipeline.MockExtractionService):
         def extract(self, image_path, position, declared_form_type):
@@ -194,7 +256,7 @@ def test_draft_succeeds_when_form_header_matches_selected_station(client, app, g
             )
             return result
 
-    monkeypatch.setattr(submissions_api, "get_extraction_service", lambda backend: MatchingStationMock())
+    monkeypatch.setattr(extraction_api, "get_extraction_service", lambda backend: MatchingStationMock())
 
     resp = client.post(
         "/api/submissions/draft",
@@ -202,7 +264,7 @@ def test_draft_succeeds_when_form_header_matches_selected_station(client, app, g
         headers=_auth_headers(token),
         content_type="multipart/form-data",
     )
-    assert resp.status_code == 201
+    assert resp.status_code == 202
 
 
 def test_pdf_upload_is_converted_to_image(client, app, geo):
@@ -217,7 +279,7 @@ def test_pdf_upload_is_converted_to_image(client, app, geo):
         headers=_auth_headers(token),
         content_type="multipart/form-data",
     )
-    assert resp.status_code == 201
+    assert resp.status_code == 202
     submission = resp.get_json()
     assert submission["image_url"].endswith("/image")
 
@@ -247,11 +309,11 @@ def test_blank_photo_rejected_before_ever_calling_extraction(client, app, geo, m
     extraction-service call finding that out."""
     token, position_id = _login_agent(client, app, geo=geo)
 
-    from app.api import submissions as submissions_api
+    from app.services import extraction as extraction_api
 
     calls = []
     monkeypatch.setattr(
-        submissions_api, "get_extraction_service",
+        extraction_api, "get_extraction_service",
         lambda backend: calls.append(backend) or None,
     )
 
@@ -318,7 +380,7 @@ def test_agent_can_correct_votes_before_finalize(client, app, geo, monkeypatch):
     token, position_id = _login_agent(client, app, geo=geo)
 
     from app.services import cv_pipeline
-    from app.api import submissions as submissions_api
+    from app.services import extraction as extraction_api
 
     class CleanMock(cv_pipeline.MockExtractionService):
         def extract(self, image_path, position, declared_form_type):
@@ -329,7 +391,7 @@ def test_agent_can_correct_votes_before_finalize(client, app, geo, monkeypatch):
             result.total_votes_cast = sum(v.votes for v in result.votes) + result.rejected_ballots
             return result
 
-    monkeypatch.setattr(submissions_api, "get_extraction_service", lambda backend: CleanMock())
+    monkeypatch.setattr(extraction_api, "get_extraction_service", lambda backend: CleanMock())
     resp = client.post(
         "/api/submissions/draft",
         data={"station_id": geo["station_id"], "position_id": position_id, "image": (fake_image_bytes(), "form.jpg")},
@@ -388,6 +450,66 @@ def test_second_submission_to_a_station_auto_supersedes_the_first_instead_of_dou
     assert original["duplicate_of"] == second["id"]
 
 
+def test_different_streams_of_the_same_station_both_count_instead_of_superseding(client, app, geo, monkeypatch):
+    """A polling station can be split into multiple independent streams
+    (separate ballot box, presiding officer, Form 34A) — e.g. a real form
+    header reading "... POLLING STATION 3 of 4". Those are genuinely
+    additional votes, not corrections of each other, and must not collide
+    on the same (station_id, form_type) the way a real retake should."""
+    from app.services import cv_pipeline
+    from app.services import extraction as extraction_api
+
+    token, position_id = _login_agent(client, app, geo=geo)
+
+    def upload_for_stream(stream_number, image_suffix):
+        class StreamMock(cv_pipeline.MockExtractionService):
+            def extract(self, image_path, position, declared_form_type):
+                result = super().extract(image_path, position, declared_form_type)
+                result.detected_location = cv_pipeline.DetectedLocation(stream_number=stream_number, stream_count=4)
+                return result
+
+        monkeypatch.setattr(extraction_api, "get_extraction_service", lambda backend: StreamMock())
+        data = {
+            "station_id": geo["station_id"], "position_id": position_id,
+            "image": (io.BytesIO(fake_image_bytes().read() + image_suffix), "form.jpg"),
+        }
+        resp = client.post(
+            "/api/submissions/draft", data=data, headers=_auth_headers(token), content_type="multipart/form-data",
+        )
+        submission_id = resp.get_json()["id"]
+        final = client.post(f"/api/submissions/{submission_id}/finalize", headers=_auth_headers(token))
+        return final.get_json()
+
+    first = upload_for_stream(1, b"stream1")
+    assert first["status"] == "auto_approved"
+    assert first["stream_number"] == 1
+
+    third = upload_for_stream(3, b"stream3")
+    assert third["status"] == "auto_approved"
+    assert third["stream_number"] == 3
+    assert third["duplicate_of"] is None
+
+    # Neither superseded the other.
+    refetched_first = client.get(f"/api/submissions/{first['id']}", headers=_auth_headers(token)).get_json()
+    assert refetched_first["status"] == "auto_approved"
+    assert refetched_first["duplicate_of"] is None
+
+    # Both count toward the tally — station.stream_count also got bumped
+    # from the imported default (1) to what the form itself reported (4).
+    from app.extensions import db
+    from app.models import PollingStation
+
+    with app.app_context():
+        station = db.session.get(PollingStation, geo["station_id"])
+        assert station.stream_count == 4
+
+    # A genuine retake of stream 1 (same stream_number) still supersedes —
+    # confirms the fix didn't loosen real duplicate detection.
+    retake = upload_for_stream(1, b"stream1-retake")
+    assert retake["status"] == "auto_approved"
+    assert retake["duplicate_of"] == first["id"]
+
+
 def test_coordinator_can_still_resolve_a_legacy_pending_review_duplicate(client, app, geo):
     """Rows already sitting in `pending_review` from before this behavior
     change (or created directly, e.g. a data fix) can still be resolved
@@ -443,7 +565,7 @@ def test_flagged_submissions_still_count_toward_tally_but_show_in_discrepancies_
     as ambiguous *or* that came in under the confidence threshold, while a
     clean, confident submission stays out of it."""
     from app.services import cv_pipeline
-    from app.api import submissions as submissions_api
+    from app.services import extraction as extraction_api
 
     class FlaggedMock(cv_pipeline.MockExtractionService):
         def extract(self, image_path, position, declared_form_type):
@@ -491,7 +613,7 @@ def test_flagged_submissions_still_count_toward_tally_but_show_in_discrepancies_
 
     def upload_and_finalize(mock_service, phone, station_id):
         token, position_id = _login_agent(client, app, phone=phone, geo=geo)
-        monkeypatch.setattr(submissions_api, "get_extraction_service", lambda backend: mock_service)
+        monkeypatch.setattr(extraction_api, "get_extraction_service", lambda backend: mock_service)
         image = io.BytesIO(fake_image_bytes().read() + phone.encode())
         resp = client.post(
             "/api/submissions/draft",

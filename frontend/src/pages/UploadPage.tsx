@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
+import { getSocket } from "@/lib/socket";
 import { useAuth } from "@/lib/auth-context";
 import { useCounties, useConstituencies, useWards, useStations } from "@/lib/hooks";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
@@ -39,12 +40,14 @@ function AgentSignInPrompt() {
 }
 
 const STATUS_LABEL: Record<string, { label: string; variant: "success" | "warning" | "destructive" | "neutral" }> = {
+  processing: { label: "Processing…", variant: "neutral" },
   draft: { label: "Draft", variant: "neutral" },
   auto_approved: { label: "Auto-approved", variant: "success" },
   pending_review: { label: "Pending review", variant: "warning" },
   manually_approved: { label: "Approved by reviewer", variant: "success" },
   rejected: { label: "Rejected", variant: "destructive" },
   duplicate: { label: "Flagged as duplicate", variant: "destructive" },
+  extraction_failed: { label: "Extraction failed", variant: "destructive" },
 };
 
 function FilePreview({ file }: { file: File }) {
@@ -133,6 +136,15 @@ function UploadForm() {
   }, [agent?.assigned_station_id, prefilled]);
 
   const missingPosition = !agent?.position_ids.length;
+  // Gate the dropdowns behind a skeleton until their backing data has
+  // actually arrived, rather than flashing empty/unselectable Selects.
+  // No loading flag on useCounties()/etc. — non-empty data is a reliable
+  // enough "resolved" signal here (there are always 47 counties in a real
+  // deployment), and missingPosition means the positions fetch never runs
+  // at all, so that branch is "resolved" immediately.
+  const positionsReady = missingPosition || myPositions.length > 0;
+  const countiesReady = counties.length > 0;
+  const sidebarReady = positionsReady && countiesReady;
 
   async function upload() {
     if (!file || !stationId || !selectedPositionId) {
@@ -157,6 +169,54 @@ function UploadForm() {
       setBusy(false);
     }
   }
+
+  // Extraction may already be resolved by the time upload() returns (local
+  // dev / mock backend — see api/services/extraction_queue.py's inline
+  // fallback) or may still be "processing" against a real Cloud Tasks
+  // queue. When it's the latter, wait for the "submission_processed"
+  // socket event (with a bounded poll as a fallback in case it's missed)
+  // and swap the resolved data in once it arrives.
+  const pollAttempts = useRef(0);
+  useEffect(() => {
+    if (!preview || preview.status !== "processing") return;
+    pollAttempts.current = 0;
+
+    let cancelled = false;
+    const submissionId = preview.id;
+
+    async function refresh() {
+      try {
+        const res = await api.get<FormSubmission>(`/api/submissions/${submissionId}`);
+        if (!cancelled && res.data.status !== "processing") setPreview(res.data);
+      } catch {
+        // transient — the next poll (or the socket event) will retry
+      }
+    }
+
+    function onProcessed(payload: { submission_id: string }) {
+      if (payload.submission_id === submissionId) refresh();
+    }
+
+    const socket = getSocket();
+    socket.on("submission_processed", onProcessed);
+
+    // Fallback only — stops after a couple of minutes so a task that never
+    // resolves doesn't poll forever.
+    const poll = setInterval(() => {
+      pollAttempts.current += 1;
+      if (pollAttempts.current > 30) {
+        clearInterval(poll);
+        return;
+      }
+      refresh();
+    }, 4000);
+
+    return () => {
+      cancelled = true;
+      socket.off("submission_processed", onProcessed);
+      clearInterval(poll);
+    };
+  }, [preview?.id, preview?.status]);
 
   async function confirm() {
     if (!preview) return;
@@ -192,6 +252,17 @@ function UploadForm() {
           <CardDescription>Signed in as {agent?.full_name}</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
+          {!sidebarReady ? (
+            <div className="flex flex-col gap-4" aria-busy="true" aria-label="Loading form options">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="flex flex-col gap-1.5">
+                  <div className="h-3 w-24 animate-pulse rounded bg-muted" />
+                  <div className="h-9 w-full animate-pulse rounded-md bg-muted" />
+                </div>
+              ))}
+            </div>
+          ) : (
+          <>
           <div className="flex flex-col gap-1.5">
             <Label>Elective position</Label>
             {myPositions.length === 0 ? (
@@ -304,6 +375,8 @@ function UploadForm() {
               </SelectContent>
             </Select>
           </div>
+          </>
+          )}
         </CardContent>
       </Card>
 
@@ -360,6 +433,16 @@ function UploadForm() {
                 </Badge>
               </div>
 
+              {preview.status === "processing" ? (
+                <div className="flex flex-col items-center gap-3 rounded-md border border-border bg-muted/40 p-8 text-center">
+                  <Loader2 className="size-6 animate-spin text-primary" />
+                  <span className="text-sm font-medium text-foreground">Processing your upload…</span>
+                  <span className="text-xs text-muted-foreground">
+                    Reading the form — this can take a few seconds.
+                  </span>
+                </div>
+              ) : (
+              <>
               <div className="grid gap-4 sm:grid-cols-[minmax(0,2fr)_3fr]">
                 {file && (
                   <div className="overflow-hidden rounded-md border border-border bg-muted">
@@ -436,6 +519,8 @@ function UploadForm() {
                 <Button variant="outline" onClick={resetForCapture}>
                   Upload another form
                 </Button>
+              )}
+              </>
               )}
             </div>
           )}

@@ -25,7 +25,7 @@ def review_submission(submission_id):
     submission = db.session.get(FormSubmission, submission_id)
     if not submission:
         raise ApiError("Not found", status_code=404)
-    if submission.status == "draft":
+    if submission.status in ("draft", "processing", "extraction_failed"):
         raise ApiError("Submission has not been finalized by the agent yet")
 
     data = request.get_json(force=True) or {}
