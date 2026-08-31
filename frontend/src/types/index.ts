@@ -75,12 +75,14 @@ export interface Candidate {
 }
 
 export type SubmissionStatus =
+  | "processing"
   | "draft"
   | "auto_approved"
   | "pending_review"
   | "manually_approved"
   | "rejected"
-  | "duplicate";
+  | "duplicate"
+  | "extraction_failed";
 
 export interface VoteRecord {
   id: string;
@@ -153,6 +155,7 @@ export interface Timeseries {
 export interface StationTally {
   station_id: string;
   station_name: string;
+  stream_number: number;
   reported_at: string | null;
   votes: Record<string, number>;
   total_votes_cast: number | null;

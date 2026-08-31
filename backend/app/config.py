@@ -13,13 +13,26 @@ class Config:
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
+    REDIS_URL = os.environ.get("REDIS_URL")  # None => single-process pub/sub
+
     CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "http://localhost:5173").split(",")
 
     UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "instance/uploads")
     MAX_CONTENT_LENGTH = 15 * 1024 * 1024  # 15MB per upload
 
+    STORAGE_BACKEND = os.environ.get("STORAGE_BACKEND", "local")
+    GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME")
+
     CV_BACKEND = os.environ.get("CV_BACKEND", "mock")
     CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.85"))
+
+    # Extraction queue — unset (default) means enqueue_extraction() runs
+    # extraction synchronously inline instead of dispatching a Cloud Task.
+    GCP_PROJECT = os.environ.get("GCP_PROJECT")
+    CLOUD_TASKS_LOCATION = os.environ.get("CLOUD_TASKS_LOCATION")
+    CLOUD_TASKS_QUEUE = os.environ.get("CLOUD_TASKS_QUEUE")
+    EXTRACTION_WORKER_URL = os.environ.get("EXTRACTION_WORKER_URL")
+    TASKS_INVOKER_SERVICE_ACCOUNT = os.environ.get("TASKS_INVOKER_SERVICE_ACCOUNT")
 
 
 class TestConfig(Config):
