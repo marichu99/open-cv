@@ -65,8 +65,20 @@ _TOOL = {
                     "constituency": {"type": ["string", "null"]},
                     "ward": {"type": ["string", "null"]},
                     "polling_station": {"type": ["string", "null"]},
+                    "stream_number": {
+                        "type": ["integer", "null"],
+                        "description": (
+                            "If the polling station name includes a stream indicator like "
+                            "'Stream 3 of 4' or '3 of 4', the stream number (3 in that example). "
+                            "null if the form doesn't print one — most stations have only one stream."
+                        ),
+                    },
+                    "stream_count": {
+                        "type": ["integer", "null"],
+                        "description": "The total number of streams from the same indicator (4 in '3 of 4'). null if not printed.",
+                    },
                 },
-                "required": ["county", "constituency", "ward", "polling_station"],
+                "required": ["county", "constituency", "ward", "polling_station", "stream_number", "stream_count"],
                 "additionalProperties": False,
             },
             "candidates": {
@@ -143,7 +155,11 @@ class ClaudeExtractionService(ExtractionService):
                     "scanned by a field agent. First read the header section (County, "
                     "Constituency, Ward, Name of Polling Station) exactly as printed — this "
                     "is used to confirm the agent photographed the right form, so read it "
-                    "verbatim rather than normalizing it. Then read every candidate row in "
+                    "verbatim rather than normalizing it. A polling station can be split into "
+                    "multiple independent streams, each with its own form — if the station name "
+                    "or header includes an indicator like 'Stream 3 of 4' or '3 of 4', report "
+                    "stream_number and stream_count separately (do not strip it from "
+                    "polling_station either — report both). Then read every candidate row in "
                     "the results table exactly as printed/handwritten, along with the total "
                     "valid votes cast and rejected ballots. Call record_form_results with "
                     "what you read. If any figure is genuinely illegible, set legible=false "
@@ -201,5 +217,7 @@ class ClaudeExtractionService(ExtractionService):
                 constituency=location.get("constituency"),
                 ward=location.get("ward"),
                 polling_station=location.get("polling_station"),
+                stream_number=location.get("stream_number"),
+                stream_count=location.get("stream_count"),
             ),
         )

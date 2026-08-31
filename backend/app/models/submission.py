@@ -9,7 +9,7 @@ from app.models.base import uuid_pk, utcnow
 #: forms further up the chain. Prefixed with the position's form_series
 #: (see ElectivePosition) to get the real IEBC form code, e.g. "39A".
 FORM_LEVEL_LETTERS = ("A", "B", "C", "D")
-STATUSES = ("draft", "auto_approved", "pending_review", "manually_approved", "rejected", "duplicate")
+STATUSES = ("processing", "draft", "auto_approved", "pending_review", "manually_approved", "rejected", "duplicate", "extraction_failed")
 REVIEW_ACTIONS = ("auto_flag", "manual_correct", "approve", "reject", "mark_duplicate")
 
 #: statuses whose votes count toward the live tally
@@ -39,6 +39,12 @@ class FormSubmission(db.Model):
 
     status = db.Column(db.Text, nullable=False, default="draft")
     duplicate_of = db.Column(UUID(as_uuid=True), db.ForeignKey("form_submission.id"))
+
+    #: Which stream of the (possibly multi-stream) polling station this form
+    #: is for — see PollingStation.stream_count. Defaults to 1 (today's
+    #: implicit single-stream assumption) unless the form header names a
+    #: specific stream and extraction detects it (app/services/extraction.py).
+    stream_number = db.Column(db.SmallInteger, nullable=False, default=1)
 
     #: cross-check / extraction warnings surfaced verbatim to the reviewer, e.g.
     #: "sum(candidate votes) + rejected != total cast"
@@ -72,6 +78,7 @@ class FormSubmission(db.Model):
             "ocr_confidence_avg": float(self.ocr_confidence_avg) if self.ocr_confidence_avg is not None else None,
             "status": self.status,
             "duplicate_of": str(self.duplicate_of) if self.duplicate_of else None,
+            "stream_number": self.stream_number,
             "warnings": self.warnings or [],
         }
         if include_votes:

@@ -191,6 +191,7 @@ def votes_by_station(position, scope_id=None):
         {
             "station_id": str(s.station_id),
             "station_name": s.station.name,
+            "stream_number": s.stream_number,
             "reported_at": s.finalized_at.isoformat() if s.finalized_at else None,
             "votes": {str(vr.candidate_id): vr.effective_votes for vr in s.vote_records},
             "total_votes_cast": s.total_votes_cast,

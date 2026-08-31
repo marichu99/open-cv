@@ -11,9 +11,11 @@ from app.models import FormSubmission, VerificationLog
 from app.models.submission import TALLIED_STATUSES
 
 
-def find_existing_approved(station_id, form_type, exclude_submission_id):
+def find_existing_approved(station_id, form_type, stream_number, exclude_submission_id):
     return (
-        FormSubmission.query.filter_by(station_id=station_id, form_type=form_type)
+        FormSubmission.query.filter_by(
+            station_id=station_id, form_type=form_type, stream_number=stream_number
+        )
         .filter(FormSubmission.status.in_(TALLIED_STATUSES))
         .filter(FormSubmission.id != exclude_submission_id)
         .first()

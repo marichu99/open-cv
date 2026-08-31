@@ -8,6 +8,24 @@ whatever's in the photo regardless of what was declared.
 import re
 
 
+#: Institution-type/boilerplate words that recur across thousands of real
+#: Kenyan polling station names — sharing only these between a detected
+#: header and a stored name isn't a meaningful signal that they're the same
+#: place ("Ensakia Primary School" and "Nyagacho Primary School" share
+#: "PRIMARY SCHOOL" but are two different, real stations in different
+#: wards). Used only to decide whether a *partial* overlap counts as a
+#: match — a name that's a strict subset/superset of the other still
+#: matches regardless (see _matches below), so this never blocks the
+#: verbose-header case the leniency exists for in the first place.
+_GENERIC_TOKENS = {
+    "PRIMARY", "SECONDARY", "SCHOOL", "POLLING", "STATION", "CENTRE", "CENTER",
+    "TBC", "DEB", "DOK", "POLYTECHNIC", "ACADEMY", "COLLEGE", "INSTITUTE",
+    "HALL", "CHIEFS", "CAMP", "MARKET", "GROUND", "GROUNDS", "DISPENSARY",
+    "CHURCH", "MOSQUE", "YOUTH", "TRAINING", "TECHNICAL", "MIXED", "DAY",
+    "BOARDING", "SOCIAL", "COMPLEX", "OF", "AND", "THE",
+}
+
+
 def _normalize(text: str | None) -> str:
     if not text:
         return ""
@@ -20,17 +38,35 @@ def _matches(detected: str, actual: str) -> bool:
     formatted ("GETARE TBC (TEA BUYING CENTRE) POLLING STATION 1 of 2" vs a
     shorter stored name), so this isn't exact-string matching — it's token
     containment either way, falling back to "at least half the shorter
-    name's words are shared" for names that partially overlap without one
-    being a strict subset of the other."""
+    name's *significant* words are shared" for names that partially overlap
+    without one being a strict subset of the other. "Significant" excludes
+    pure-digit tokens (a stream indicator like the "1"/"2" in "... 1 of 2"
+    never identifies a place) and _GENERIC_TOKENS — without that exclusion,
+    two entirely different short station names sharing only generic words
+    ("Primary School") could cross the 50% threshold on boilerplate alone."""
     d, a = _normalize(detected), _normalize(actual)
     if not d or not a:
         return True
-    d_tokens, a_tokens = set(d.split()), set(a.split())
+    d_tokens = {t for t in d.split() if not t.isdigit()}
+    a_tokens = {t for t in a.split() if not t.isdigit()}
+    if not d_tokens or not a_tokens:
+        return True
     if d_tokens <= a_tokens or a_tokens <= d_tokens:
         return True
-    overlap = d_tokens & a_tokens
-    shorter = min(len(d_tokens), len(a_tokens))
-    return shorter > 0 and len(overlap) / shorter >= 0.5
+
+    d_significant = d_tokens - _GENERIC_TOKENS
+    a_significant = a_tokens - _GENERIC_TOKENS
+    shorter_significant = min(len(d_significant), len(a_significant))
+    if shorter_significant == 0:
+        # Both names are entirely generic words (rare) — nothing meaningful
+        # to require overlap of, so fall back to the plain ratio rather
+        # than refusing to ever match.
+        overlap = d_tokens & a_tokens
+        shorter = min(len(d_tokens), len(a_tokens))
+        return shorter > 0 and len(overlap) / shorter >= 0.5
+
+    significant_overlap = (d_tokens & a_tokens) - _GENERIC_TOKENS
+    return len(significant_overlap) / shorter_significant >= 0.5
 
 
 def location_mismatches(detected_location, station) -> list[str]:

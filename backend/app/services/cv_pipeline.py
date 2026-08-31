@@ -39,6 +39,13 @@ class DetectedLocation:
     constituency: str | None = None
     ward: str | None = None
     polling_station: str | None = None
+    #: A polling station can be split into multiple independent "streams"
+    #: (separate ballot box, presiding officer, and Form 34A) — e.g. a form
+    #: header printed "... POLLING STATION 3 of 4" is stream_number=3,
+    #: stream_count=4. None when the form doesn't print a stream indicator
+    #: (the large majority of single-stream stations).
+    stream_number: int | None = None
+    stream_count: int | None = None
 
 
 @dataclass
