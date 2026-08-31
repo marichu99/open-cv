@@ -19,7 +19,7 @@ def create_app(config_object: type = Config) -> Flask:
     migrate.init_app(app, db)
     jwt.init_app(app)
     cors.init_app(app, resources={r"/api/*": {"origins": app.config["CORS_ORIGINS"]}})
-    socketio.init_app(app, message_queue=None)
+    socketio.init_app(app, message_queue=app.config["REDIS_URL"])
 
     from app import models  # noqa: F401  (registers models with SQLAlchemy)
     from app.api import BLUEPRINTS

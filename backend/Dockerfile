@@ -12,7 +12,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 RUN mkdir -p instance/uploads
 
+COPY docker-entrypoint.sh .
+RUN chmod +x docker-entrypoint.sh
+
 ENV PORT=8080
 EXPOSE 8080
 
-CMD ["gunicorn", "--worker-class", "eventlet", "-w", "1", "--bind", "0.0.0.0:8080", "wsgi:app"]
+ENTRYPOINT ["./docker-entrypoint.sh"]
