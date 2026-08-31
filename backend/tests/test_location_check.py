@@ -68,3 +68,30 @@ def test_flags_a_genuinely_different_polling_station():
     mismatches = location_mismatches(detected, _station(station_name="Getare Tbc Polling Station"))
     assert len(mismatches) == 1
     assert "polling station" in mismatches[0]
+
+
+def test_short_names_sharing_only_generic_words_are_flagged_as_a_mismatch():
+    """Real bug: "Ensakia Primary School" (selected) vs a real form header
+    for "Nyagacho Primary School Polling Station 1 of 2" — these are two
+    different, real stations that happen to share "Primary School" and
+    nothing else. The old 50%-of-shorter-set overlap heuristic let
+    boilerplate words alone cross the threshold; this must not match."""
+    detected = DetectedLocation(
+        county="Nyamira", constituency="West Mugirango", ward="Bogichora",
+        polling_station="NYAGACHO PRIMARY SCHOOL POLLING STATION 1 of 2",
+    )
+    mismatches = location_mismatches(detected, _station(station_name="Ensakia Primary School"))
+    assert len(mismatches) == 1
+    assert "polling station" in mismatches[0]
+
+
+def test_short_names_still_match_when_the_distinguishing_word_is_shared():
+    """The fix shouldn't overcorrect — a real match on a short name (the
+    distinguishing word "NYAGACHO" itself is shared, not just boilerplate)
+    must still pass, verbose header and all."""
+    detected = DetectedLocation(
+        county="Nyamira", constituency="West Mugirango", ward="Bogichora",
+        polling_station="NYAGACHO PRIMARY SCHOOL POLLING STATION 1 of 2",
+    )
+    mismatches = location_mismatches(detected, _station(station_name="Nyagacho Primary School"))
+    assert mismatches == []
