@@ -259,6 +259,56 @@ Memorystore is VPC-internal only — both services need the already-created
 `--vpc-connector=tally333-connector`, the same way
 `--add-cloudsql-instances` is already needed for Cloud SQL above.
 
+### Fixed: coordinator moderation queue didn't live-refresh
+
+Reported as "the agent upload does not refresh the feed, it requires a hard
+refresh." Diagnosed by proving each hop of the pipeline independently
+against the real deployment, in order, rather than guessing:
+
+1. A one-off Cloud Run Job (Python, `redis-py`) subscribed directly to
+   Redis pub/sub (`psubscribe('*')`) while a real `finalize()` call was
+   fired against `tally333-api` — confirmed the publish side works:
+   `tally_updated` genuinely reaches Redis on the `flask-socketio` channel.
+2. A real `socket.io-client` (Node.js) connected to `tally333-realtime` and,
+   with a real `finalize()` fired mid-connection, received the relayed
+   `tally_updated` event within ~1s — confirmed the relay side works too
+   (an intermittent Engine.IO ping-timeout disconnect was observed and
+   auto-recovered, not a bug — see below).
+3. A headless-Chromium session (Playwright) against the actual
+   `https://project-x-477317.web.app/dashboard`, with a real `finalize()`
+   fired mid-session, showed the new station row appear with no reload —
+   confirming `useLiveResource` (`frontend/src/lib/hooks.ts`) — the
+   dashboard's socket-listener-plus-20s-poll hook — works end-to-end.
+
+So the whole live-update mechanism was sound. The actual bug: `AdminPage.tsx`
+(the coordinator's moderation/discrepancies queue) never used
+`useLiveResource` at all — it fetched `/api/submissions` once on mount via
+a bespoke `useCallback`, with no socket listener and no poll fallback. A
+newly-flagged submission, or another reviewer resolving one (`review.py`'s
+manual-approve/reject also emits `tally_updated`), simply never appeared
+without a manual reload — the one page that was never wired into the
+mechanism every other view already had. Fixed by adding
+`useSubmissionsFeed()` to `hooks.ts`, a thin wrapper around the same
+`useLiveResource` used everywhere else. Re-verified with the same
+Playwright-plus-real-`finalize()` approach against the redeployed page: the
+"N shown" count updated live, no reload, ~1.2s after `finalize()` returned.
+
+**Gotcha hit repeatedly while building the diagnostic scripts**: passing a
+multi-statement Python payload to a one-off Cloud Run Job via
+`gcloud run jobs deploy --args="^;^-c;import x;exec(...)"` silently split
+into *three* args on the semicolon inside the payload itself, not two —
+`python3 -c "import x"` ran (doing nothing, exiting 0) while the actual
+exec call sat inert in `sys.argv[2]`, never executed. No error, no
+non-zero exit, just silent no-op success — worth remembering next to the
+comma-delimiter gotcha above. Fixed by writing the payload as one
+statement (`exec(__import__('base64').b64decode(...).decode())`) that
+needs no semicolon at all, sidestepping the delimiter question entirely.
+Also: Cloud Run Jobs' stdout capture into Cloud Logging proved unreliable
+enough during this investigation that the more robust pattern was to have
+the job write its findings straight to GCS (`google-cloud-storage`, same
+credentials the job already had for Cloud SQL) and read them back with
+`gcloud storage cat`, rather than trust `gcloud logging read`.
+
 ### Cache the read-only path at the edge
 
 Most of the 50,000 users are reading, not holding a socket open. Put an

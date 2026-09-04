@@ -13,6 +13,7 @@ import type {
   VotesByStation,
   VotesByGroup,
   GroupingLevel,
+  FormSubmission,
 } from "@/types";
 
 // Lazy, cascading geography fetches — at national scale (47 counties, 290
@@ -132,4 +133,14 @@ export function useVotesByGroup(
   const base = tallyPath("/api/tally/by_group", positionId, scopeId, scopeRequired);
   const path = base ? `${base}&level=${level}` : null;
   return useLiveResource<VotesByGroup>(path, { candidates: [], level, groups: [] });
+}
+
+/** The coordinator/admin review queue — refetches on `tally_updated`
+ * (emitted both when a new submission is finalized and when another
+ * reviewer resolves one), so a newly-flagged submission or someone else's
+ * review action shows up without a manual reload. */
+export function useSubmissionsFeed(params: Record<string, string>) {
+  const query = new URLSearchParams(params).toString();
+  const path = `/api/submissions${query ? `?${query}` : ""}`;
+  return useLiveResource<FormSubmission[]>(path, []);
 }
