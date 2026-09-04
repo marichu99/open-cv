@@ -16,6 +16,7 @@ import logging
 import anthropic
 from PIL import Image
 
+from app.models.candidate import POSITION_LABELS, POSITION_NAMES
 from app.services.cv_pipeline import DetectedLocation, ExtractionResult, ExtractionService, FieldExtraction
 from app.utils.errors import ApiError
 
@@ -42,15 +43,6 @@ _PRICE_OUTPUT = 10.00 / 1_000_000
 _PRICE_CACHE_WRITE = 2.50 / 1_000_000
 _PRICE_CACHE_READ = 0.20 / 1_000_000
 
-_POSITION_LABELS = {
-    "president": "President",
-    "governor": "Governor",
-    "senator": "Senator",
-    "woman_representative": "Woman Representative",
-    "member_of_parliament": "Member of Parliament",
-    "mca": "Member of County Assembly (MCA)",
-}
-
 _TOOL = {
     "name": "record_form_results",
     "description": "Record the election results read from the IEBC results form image.",
@@ -60,6 +52,19 @@ _TOOL = {
             "legible": {
                 "type": "boolean",
                 "description": "False if the handwriting/print is too unclear to be confident in the figures.",
+            },
+            "elective_position": {
+                "type": "string",
+                "enum": list(POSITION_NAMES),
+                "description": (
+                    "Which of the 6 elective races this specific form's results table is for, "
+                    "as printed in the form's title/header (e.g. 'PRESIDENTIAL ELECTION', "
+                    "'MEMBER OF THE COUNTY ASSEMBLY', 'WOMAN REPRESENTATIVE TO THE NATIONAL "
+                    "ASSEMBLY') — read this from the form itself, never assume it matches what "
+                    "you were told to expect. This is the single most important field to get "
+                    "right: getting it wrong means every candidate below gets filed under the "
+                    "wrong race entirely."
+                ),
             },
             "location": {
                 "type": "object",
@@ -116,7 +121,10 @@ _TOOL = {
                 ),
             },
         },
-        "required": ["legible", "location", "candidates", "total_votes_cast", "rejected_ballots", "warnings"],
+        "required": [
+            "legible", "elective_position", "location", "candidates",
+            "total_votes_cast", "rejected_ballots", "warnings",
+        ],
         "additionalProperties": False,
     },
     "strict": True,
@@ -171,7 +179,7 @@ class ClaudeExtractionService(ExtractionService):
     def extract(self, image_path: str, position, declared_form_type: str) -> ExtractionResult:
         image_b64, media_type = _prepare_image(image_path)
 
-        position_label = _POSITION_LABELS.get(position.name, position.name)
+        position_label = POSITION_LABELS.get(position.name, position.name)
 
         try:
             response = self.client.messages.create(
@@ -181,9 +189,18 @@ class ClaudeExtractionService(ExtractionService):
                 system=[{
                     "type": "text",
                     "text": (
-                        "You are transcribing a Kenyan IEBC election results form (Form "
-                        f"{declared_form_type}) for the {position_label} race, photographed or "
-                        "scanned by a field agent. First read the header section (County, "
+                        "You are transcribing a Kenyan IEBC election results form, photographed "
+                        "or scanned by a field agent, who was expecting to submit a Form "
+                        f"{declared_form_type} for the {position_label} race — but confirm that "
+                        "from the form itself rather than assuming it: field agents occasionally "
+                        "pick the wrong race from the upload menu, especially when assigned to "
+                        "submit for more than one. Identify elective_position from the form's own "
+                        "title/header (e.g. 'PRESIDENTIAL ELECTION' vs 'MEMBER OF THE COUNTY "
+                        "ASSEMBLY (MCA) ELECTION') independent of what you were told to expect — "
+                        "if the form is for a different race than declared, report that race in "
+                        "elective_position and still transcribe the candidates/votes actually "
+                        "printed on it (never relabel or force-fit them into the expected race). "
+                        "First read the header section (County, "
                         "Constituency, Ward, Name of Polling Station) exactly as printed — this "
                         "is used to confirm the agent photographed the right form, so read it "
                         "verbatim rather than normalizing it. A polling station can be split into "
@@ -247,6 +264,7 @@ class ClaudeExtractionService(ExtractionService):
             total_votes_confidence=confidence,
             rejected_ballots_confidence=confidence,
             warnings=warnings,
+            detected_position=data["elective_position"],
             detected_location=DetectedLocation(
                 county=location.get("county"),
                 constituency=location.get("constituency"),

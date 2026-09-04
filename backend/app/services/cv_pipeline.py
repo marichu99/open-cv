@@ -61,6 +61,16 @@ class ExtractionResult:
     #: mock backend) — location cross-checking is skipped in that case,
     #: rather than treating "nothing detected" as a mismatch.
     detected_location: DetectedLocation | None = None
+    #: The elective position (one of app.models.candidate.POSITION_NAMES) as
+    #: read from the form's own title/header — e.g. an agent assigned to
+    #: both President and Woman Representative could pick the wrong one from
+    #: the upload dropdown for a given photo, silently filing real Woman Rep
+    #: aspirants as presidential candidates (nothing else in the pipeline
+    #: would catch that, since extraction otherwise just trusts the declared
+    #: position). None means this backend doesn't detect it — see
+    #: services/position_check.py, which skips the check in that case the
+    #: same way location_mismatches does for detected_location.
+    detected_position: str | None = None
 
     @property
     def overall_confidence(self) -> float:

@@ -267,6 +267,71 @@ def test_draft_succeeds_when_form_header_matches_selected_station(client, app, g
     assert resp.status_code == 202
 
 
+def test_draft_rejected_when_form_is_for_a_different_race_than_declared(client, app, geo, monkeypatch):
+    """Real bug: an agent assigned to more than one position picks the wrong
+    one from the upload dropdown — e.g. selects President but the photo is
+    actually a Woman Representative form. Nothing about the station/location
+    would catch that (the form's own header can match the right station
+    just fine), so candidates would otherwise get silently filed under the
+    wrong race with real vote totals attached to them."""
+    token, position_id = _login_agent(client, app, geo=geo, position_name="woman_representative")
+
+    from app.services import cv_pipeline
+    from app.services import extraction as extraction_api
+
+    class WrongRaceMock(cv_pipeline.MockExtractionService):
+        def extract(self, image_path, position, declared_form_type):
+            result = super().extract(image_path, position, declared_form_type)
+            result.detected_position = "president"
+            return result
+
+    monkeypatch.setattr(extraction_api, "get_extraction_service", lambda backend: WrongRaceMock())
+
+    resp = client.post(
+        "/api/submissions/draft",
+        data={"station_id": geo["station_id"], "position_id": position_id, "image": (fake_image_bytes(), "form.jpg")},
+        headers=_auth_headers(token),
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 202
+    body = resp.get_json()
+    assert body["status"] == "extraction_failed"
+    warnings_text = " ".join(body["warnings"])
+    assert "President" in warnings_text
+    assert "Woman Representative" in warnings_text
+
+    # No candidates/vote records were created for the wrong race — the
+    # mismatch is caught before get_or_create_candidate ever runs.
+    from app.models import Candidate
+
+    with app.app_context():
+        assert Candidate.query.count() == 0
+
+
+def test_draft_succeeds_when_detected_race_matches_declared(client, app, geo, monkeypatch):
+    token, position_id = _login_agent(client, app, geo=geo, position_name="woman_representative")
+
+    from app.services import cv_pipeline
+    from app.services import extraction as extraction_api
+
+    class MatchingRaceMock(cv_pipeline.MockExtractionService):
+        def extract(self, image_path, position, declared_form_type):
+            result = super().extract(image_path, position, declared_form_type)
+            result.detected_position = "woman_representative"
+            return result
+
+    monkeypatch.setattr(extraction_api, "get_extraction_service", lambda backend: MatchingRaceMock())
+
+    resp = client.post(
+        "/api/submissions/draft",
+        data={"station_id": geo["station_id"], "position_id": position_id, "image": (fake_image_bytes(), "form.jpg")},
+        headers=_auth_headers(token),
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 202
+    assert resp.get_json()["status"] == "draft"
+
+
 def test_pdf_upload_is_converted_to_image(client, app, geo):
     token, position_id = _login_agent(client, app, geo=geo)
     resp = client.post(
