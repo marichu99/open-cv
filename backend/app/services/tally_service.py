@@ -192,7 +192,14 @@ def votes_by_station(position, scope_id=None):
             "station_id": str(s.station_id),
             "station_name": s.station.name,
             "stream_number": s.stream_number,
+            #: The station's *known* stream count — independent of how many
+            #: of those streams have actually reported so far, so a viewer
+            #: can tell "Stream 1 of 3" apart from a genuinely single-stream
+            #: station even before the other streams come in.
+            "stream_count": s.station.stream_count,
             "reported_at": s.finalized_at.isoformat() if s.finalized_at else None,
+            "uploaded_at": s.uploaded_at.isoformat() if s.uploaded_at else None,
+            "agent_name": s.agent.full_name if s.agent else None,
             "votes": {str(vr.candidate_id): vr.effective_votes for vr in s.vote_records},
             "total_votes_cast": s.total_votes_cast,
             "rejected_ballots": s.rejected_ballots,
