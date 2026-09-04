@@ -1,0 +1,118 @@
+name: Deploy
+
+# Runs whenever a PR merges to main (a merge is just a push to main from
+# GitHub's point of view) or on manual trigger.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+env:
+  PROJECT_ID: project-x-477317
+  REGION: us-central1
+  # WIF principal that authenticates this workflow — see docs/DEPLOYMENT.md
+  # "CI/CD" for how this pool/provider/service-account were provisioned.
+  WORKLOAD_IDENTITY_PROVIDER: projects/82161509094/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider
+  DEPLOYER_SA: github-actions-deployer@project-x-477317.iam.gserviceaccount.com
+
+# Cancel an in-flight deploy if another push lands on main before it finishes
+# — never want two deploys racing to update the same Cloud Run services.
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  deploy-backend:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # required to mint the OIDC token WIF exchanges
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      # One image serves tally333-api, tally333-realtime, and
+      # tally333-extraction-worker — see docker-entrypoint.sh's SERVICE_ROLE
+      # switch. Tag with the commit SHA (not `latest`) so every deployed
+      # revision is traceable back to the exact commit, and `gcloud run
+      # services update-traffic --to-revisions` can roll back precisely.
+      - name: Build and push image
+        run: |
+          gcloud builds submit ./backend \
+            --tag "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/tally333/backend:${{ github.sha }}"
+
+      # All three share the image but are separate Cloud Run *services* with
+      # independent revision history — deploying tally333-api does NOT
+      # redeploy tally333-realtime or tally333-extraction-worker. Redeploying
+      # all three here is exactly the fix for the gotcha documented in
+      # docs/DEPLOYMENT.md ("tally333-extraction-worker is a separate
+      # deployment ... does not get redeployed by 'redeploy the backend'").
+      #
+      # Only --image is passed: gcloud run deploy is incremental and keeps
+      # every other setting (env vars, secrets, memory, VPC connector) from
+      # each service's current revision untouched.
+      - name: Deploy tally333-api
+        run: |
+          gcloud run deploy tally333-api \
+            --image "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/tally333/backend:${{ github.sha }}" \
+            --region "${{ env.REGION }}" \
+            --quiet
+
+      - name: Deploy tally333-realtime
+        run: |
+          gcloud run deploy tally333-realtime \
+            --image "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/tally333/backend:${{ github.sha }}" \
+            --region "${{ env.REGION }}" \
+            --quiet
+
+      - name: Deploy tally333-extraction-worker
+        run: |
+          gcloud run deploy tally333-extraction-worker \
+            --image "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/tally333/backend:${{ github.sha }}" \
+            --region "${{ env.REGION }}" \
+            --quiet
+
+  deploy-frontend:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.DEPLOYER_SA }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Vite bakes VITE_API_URL/VITE_SOCKET_URL into the JS bundle at build
+      # time (see docs/DEPLOYMENT.md's "Gotcha" section) — a plain runtime
+      # env var wouldn't do anything, the frontend must be rebuilt whenever
+      # either URL changes. Override via repo Settings -> Secrets and
+      # variables -> Actions -> Variables if these ever change; the `||`
+      # fallback keeps this workflow runnable before that's set up.
+      - name: Build
+        working-directory: frontend
+        env:
+          VITE_API_URL: ${{ vars.VITE_API_URL || 'https://8-232-246-179.nip.io' }}
+          VITE_SOCKET_URL: ${{ vars.VITE_SOCKET_URL || 'https://tally333-realtime-82161509094.us-central1.run.app' }}
+        run: |
+          npm ci
+          npm run build
+
+      - name: Deploy to Firebase Hosting
+        working-directory: frontend
+        run: |
+          npm install -g firebase-tools
+          firebase deploy --only hosting --project "${{ env.PROJECT_ID }}" --non-interactive
