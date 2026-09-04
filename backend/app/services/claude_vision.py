@@ -149,22 +149,27 @@ class ClaudeExtractionService(ExtractionService):
             response = self.client.messages.create(
                 model=MODEL,
                 max_tokens=2048,
-                system=(
-                    "You are transcribing a Kenyan IEBC election results form (Form "
-                    f"{declared_form_type}) for the {position_label} race, photographed or "
-                    "scanned by a field agent. First read the header section (County, "
-                    "Constituency, Ward, Name of Polling Station) exactly as printed — this "
-                    "is used to confirm the agent photographed the right form, so read it "
-                    "verbatim rather than normalizing it. A polling station can be split into "
-                    "multiple independent streams, each with its own form — if the station name "
-                    "or header includes an indicator like 'Stream 3 of 4' or '3 of 4', report "
-                    "stream_number and stream_count separately (do not strip it from "
-                    "polling_station either — report both). Then read every candidate row in "
-                    "the results table exactly as printed/handwritten, along with the total "
-                    "valid votes cast and rejected ballots. Call record_form_results with "
-                    "what you read. If any figure is genuinely illegible, set legible=false "
-                    "and explain why in warnings rather than guessing a number."
-                ),
+                output_config={"effort": "low"},
+                system=[{
+                    "type": "text",
+                    "text": (
+                        "You are transcribing a Kenyan IEBC election results form (Form "
+                        f"{declared_form_type}) for the {position_label} race, photographed or "
+                        "scanned by a field agent. First read the header section (County, "
+                        "Constituency, Ward, Name of Polling Station) exactly as printed — this "
+                        "is used to confirm the agent photographed the right form, so read it "
+                        "verbatim rather than normalizing it. A polling station can be split into "
+                        "multiple independent streams, each with its own form — if the station name "
+                        "or header includes an indicator like 'Stream 3 of 4' or '3 of 4', report "
+                        "stream_number and stream_count separately (do not strip it from "
+                        "polling_station either — report both). Then read every candidate row in "
+                        "the results table exactly as printed/handwritten, along with the total "
+                        "valid votes cast and rejected ballots. Call record_form_results with "
+                        "what you read. If any figure is genuinely illegible, set legible=false "
+                        "and explain why in warnings rather than guessing a number."
+                    ),
+                    "cache_control": {"type": "ephemeral"},
+                }],
                 tools=[_TOOL],
                 tool_choice={"type": "tool", "name": "record_form_results"},
                 messages=[{
