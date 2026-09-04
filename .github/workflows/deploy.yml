@@ -38,6 +38,15 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
+      # Build directly in the runner and push straight to Artifact Registry
+      # rather than `gcloud builds submit` (Cloud Build): that command
+      # uploads source to an auto-created legacy staging bucket
+      # (`PROJECT_ID_cloudbuild`) that a scoped custom service account isn't
+      # implicitly granted access to — it errors "user is forbidden from
+      # accessing the bucket" unless you widen the SA's IAM further. Building
+      # locally in the runner needs nothing beyond artifactregistry.writer,
+      # which the deployer SA already has.
+      #
       # One image serves tally333-api, tally333-realtime, and
       # tally333-extraction-worker — see docker-entrypoint.sh's SERVICE_ROLE
       # switch. Tag with the commit SHA (not `latest`) so every deployed
@@ -45,8 +54,9 @@ jobs:
       # services update-traffic --to-revisions` can roll back precisely.
       - name: Build and push image
         run: |
-          gcloud builds submit ./backend \
-            --tag "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/tally333/backend:${{ github.sha }}"
+          gcloud auth configure-docker "${{ env.REGION }}-docker.pkg.dev" --quiet
+          docker build -t "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/tally333/backend:${{ github.sha }}" ./backend
+          docker push "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/tally333/backend:${{ github.sha }}"
 
       # All three share the image but are separate Cloud Run *services* with
       # independent revision history — deploying tally333-api does NOT
