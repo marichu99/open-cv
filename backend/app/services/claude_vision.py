@@ -34,6 +34,14 @@ MODEL = "claude-sonnet-5"
 MAX_DIMENSION = 1568
 JPEG_QUALITY = 88
 
+#: claude-sonnet-5 rates, USD per token (Anthropic list price: $2/$10 per
+#: MTok; cache write/read are the standard 1.25x / 0.1x multipliers on the
+#: input rate for the default 5-minute TTL we use via `cache_control`).
+_PRICE_INPUT = 2.00 / 1_000_000
+_PRICE_OUTPUT = 10.00 / 1_000_000
+_PRICE_CACHE_WRITE = 2.50 / 1_000_000
+_PRICE_CACHE_READ = 0.20 / 1_000_000
+
 _POSITION_LABELS = {
     "president": "President",
     "governor": "Governor",
@@ -136,6 +144,26 @@ def _prepare_image(image_path: str) -> tuple[str, str]:
     return base64.standard_b64encode(buf.getvalue()).decode("utf-8"), "image/jpeg"
 
 
+def _log_usage(usage) -> None:
+    """One greppable key=value INFO line per call — plain `logging.basicConfig`
+    has no structured/JSON pipeline here, so this is written to be picked up
+    by a Cloud Logging log-based metric via regex extraction (see
+    docs/DEPLOYMENT.md) rather than relying on jsonPayload field access."""
+    cache_write = usage.cache_creation_input_tokens or 0
+    cache_read = usage.cache_read_input_tokens or 0
+    cost_usd = (
+        usage.input_tokens * _PRICE_INPUT
+        + usage.output_tokens * _PRICE_OUTPUT
+        + cache_write * _PRICE_CACHE_WRITE
+        + cache_read * _PRICE_CACHE_READ
+    )
+    logger.info(
+        "claude_vision_usage model=%s input_tokens=%d output_tokens=%d "
+        "cache_creation_input_tokens=%d cache_read_input_tokens=%d cost_usd=%.6f",
+        MODEL, usage.input_tokens, usage.output_tokens, cache_write, cache_read, cost_usd,
+    )
+
+
 class ClaudeExtractionService(ExtractionService):
     def __init__(self):
         self.client = anthropic.Anthropic()
@@ -182,6 +210,8 @@ class ClaudeExtractionService(ExtractionService):
                 "If this keeps happening, let your coordinator know.",
                 status_code=503,
             ) from exc
+
+        _log_usage(response.usage)
 
         tool_use = next(b for b in response.content if b.type == "tool_use")
         data = tool_use.input
