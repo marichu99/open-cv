@@ -9,6 +9,19 @@ POSITION_NAMES = ("president", "governor", "senator", "woman_representative", "m
 # assumption that Women Rep was "34A"; 34 is actually the Presidential series).
 POSITION_LEVELS = ("national", "county", "constituency", "ward")
 
+#: Human-readable label per POSITION_NAMES key — shared by the Claude Vision
+#: prompt/schema (services/claude_vision.py) and the declared-vs-detected
+#: mismatch check (services/position_check.py) so both name a position the
+#: same way.
+POSITION_LABELS = {
+    "president": "President",
+    "governor": "Governor",
+    "senator": "Senator",
+    "woman_representative": "Woman Representative",
+    "member_of_parliament": "Member of Parliament",
+    "mca": "Member of County Assembly (MCA)",
+}
+
 
 class ElectivePosition(db.Model):
     """Static reference data — the 6 elective seats in a Kenyan general

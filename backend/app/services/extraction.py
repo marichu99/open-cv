@@ -17,6 +17,7 @@ from app.models import ElectivePosition, FormSubmission, VoteRecord
 from app.services.candidates import get_or_create_candidate, geo_scope_for_position
 from app.services.cv_pipeline import get_extraction_service
 from app.services.location_check import location_mismatches
+from app.services.position_check import position_mismatch
 from app.services.storage import GCSStorage
 
 
@@ -42,6 +43,19 @@ def _run_extraction(submission: FormSubmission, local_path: str) -> None:
     position = db.session.get(ElectivePosition, submission.position_id)
     service = get_extraction_service(current_app.config["CV_BACKEND"])
     result = service.extract(local_path, position, submission.form_type)
+
+    # Checked before location: a wrong-race form is a worse mismatch than a
+    # wrong-station one, and there's no point cross-checking the header
+    # against this station if the results table isn't even for the position
+    # the agent selected — get_or_create_candidate below trusts position_id
+    # completely, so an undetected mismatch here would silently file real
+    # candidates from one race under a different one.
+    mismatch = position_mismatch(result.detected_position, position)
+    if mismatch:
+        submission.status = "extraction_failed"
+        submission.warnings = [mismatch]
+        db.session.commit()
+        return
 
     mismatches = location_mismatches(result.detected_location, submission.station)
     if mismatches:
