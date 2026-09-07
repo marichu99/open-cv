@@ -78,14 +78,20 @@ def create_draft():
         station_id=station.id, form_type=form_type, image_sha256=sha256
     ).first()
     if existing:
-        if existing.status not in ("draft", "processing"):
+        if existing.status not in ("draft", "processing", "extraction_failed"):
             raise ApiError("This exact image has already been uploaded for this station/form", status_code=409)
-        # Neither a draft nor a still-processing submission is "uploaded"
-        # until /finalize is called — this is an abandoned attempt from
-        # earlier (e.g. the agent hit Retake, or a task is still in flight)
-        # that was never confirmed. The DB's unique constraint on
-        # (station_id, form_type, image_sha256) means the new upload can't
-        # coexist with it, so replace it rather than block.
+        # None of draft, still-processing, or extraction_failed is
+        # "uploaded" in any sense worth protecting — the first two are
+        # abandoned attempts from earlier (e.g. the agent hit Retake, or a
+        # task is still in flight) that were never confirmed, and
+        # extraction_failed means the pipeline itself couldn't process the
+        # photo (blank/mismatched-location/etc — see models/submission.py's
+        # STATUSES), which is exactly the case where the agent is expected
+        # to retake or simply retry the same photo, e.g. after a location-
+        # check false positive gets fixed server-side. The DB's unique
+        # constraint on (station_id, form_type, image_sha256) means the new
+        # upload can't coexist with any of these, so replace rather than
+        # block with a misleading "already uploaded" error.
         db.session.delete(existing)
         db.session.flush()
 

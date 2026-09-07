@@ -169,6 +169,37 @@ def test_retaking_an_unconfirmed_draft_replaces_it_instead_of_blocking(client, a
     assert client.get(f"/api/submissions/{first_id}", headers=_auth_headers(token)).status_code == 404
 
 
+def test_retaking_a_submission_that_failed_extraction_also_replaces_it(client, app, geo):
+    """Real bug: a submission that failed extraction (blank photo, location
+    mismatch, etc — status "extraction_failed") permanently occupied the
+    (station_id, form_type, image_sha256) DB slot, so re-uploading the exact
+    same photo afterward (e.g. after the underlying cause is fixed) was
+    blocked with a misleading 409 "already uploaded" — even though nothing
+    was ever actually, successfully uploaded for this station/form."""
+    token, position_id = _login_agent(client, app, geo=geo)
+    payload = {"station_id": geo["station_id"], "position_id": position_id, "image": (fake_image_bytes(), "form.jpg")}
+    first = client.post(
+        "/api/submissions/draft", data=payload, headers=_auth_headers(token), content_type="multipart/form-data"
+    )
+    first_id = first.get_json()["id"]
+
+    from app.extensions import db
+    from app.models import FormSubmission
+
+    with app.app_context():
+        submission = db.session.get(FormSubmission, first_id)
+        submission.status = "extraction_failed"
+        db.session.commit()
+
+    payload2 = {"station_id": geo["station_id"], "position_id": position_id, "image": (fake_image_bytes(), "form.jpg")}
+    second = client.post(
+        "/api/submissions/draft", data=payload2, headers=_auth_headers(token), content_type="multipart/form-data"
+    )
+    assert second.status_code == 202
+    assert second.get_json()["id"] != first_id
+    assert client.get(f"/api/submissions/{first_id}", headers=_auth_headers(token)).status_code == 404
+
+
 def test_retaking_a_submission_still_stuck_processing_also_replaces_it(client, app, geo):
     """The synchronous test environment resolves extraction inline, so it
     never naturally leaves a row sitting at "processing" — this simulates
