@@ -26,7 +26,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   // Logged out: a minimal top bar. Signing up as any role — agent or
   // campaign manager — happens on "/" via a role picker, not via separate
-  // header links. No Dashboard link here — it requires login now.
+  // header links. Dashboard is public (see App.tsx), so it's the one link
+  // shown here — deliberately no link to Agent upload: submitting a form
+  // requires signing in regardless (UploadPage's own guard), and a visible
+  // link would misrepresent it as a public-facing feature the way
+  // Dashboard genuinely is.
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="border-b border-border">
@@ -35,8 +39,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             Tally333
           </Link>
           <nav className="flex items-center gap-4 text-sm font-medium text-muted-foreground">
-            <Link to="/agent" className="hover:text-foreground">
-              Agent upload
+            <Link to="/dashboard" className="hover:text-foreground">
+              Dashboard
             </Link>
           </nav>
           <Link to="/login">
