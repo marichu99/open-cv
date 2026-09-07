@@ -851,6 +851,17 @@ redeployed with a different env var. `docker-compose.yml`'s
 `frontend.build.args` shows the same thing locally: changing either value
 requires `docker compose build frontend` again, not just `up`.
 
+**A second thing that has to change in lockstep**: `frontend/firebase.json`'s
+`Content-Security-Policy` header hardcodes the same two production
+origins (`https://8-232-246-179.nip.io`, `tally333-realtime`'s `run.app`
+URL, `ws`+`wss`) in its `connect-src` directive — CSP is a static HTTP
+header, not something Vite can bake from the env vars above. If
+`VITE_API_URL`/`VITE_SOCKET_URL` ever change, `connect-src` needs the same
+edit or the deployed app's own API/Socket.IO calls will be silently
+blocked by the browser (visible as CSP violation errors in devtools, not
+a backend error). `frontend/nginx.conf` carries the equivalent header for
+the local Docker/docker-compose path, scoped to `localhost:8000`.
+
 ## Secrets
 
 ```bash
