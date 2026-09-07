@@ -95,3 +95,31 @@ def test_short_names_still_match_when_the_distinguishing_word_is_shared():
     )
     mismatches = location_mismatches(detected, _station(station_name="Nyagacho Primary School"))
     assert mismatches == []
+
+
+def test_apostrophe_variants_of_the_same_name_still_match():
+    """Real false positive: a form reading "KONG'ASIS" flagged against a
+    stored ward name "Kongasis" — same place, same pronunciation (the
+    apostrophe marks a glottal stop common in Kenyan place names, e.g.
+    "Ng'arua"), but the old normalization treated the apostrophe as a word
+    separator, splitting "KONG'ASIS" into two tokens ("KONG", "ASIS") that
+    then shared nothing with the single token "KONGASIS"."""
+    detected = DetectedLocation(county="Bomet", constituency="Chepalungu", ward="KONG'ASIS",
+                                 polling_station="Saunet Primary School")
+    mismatches = location_mismatches(detected, _station(
+        station_name="Saunet Primary School", ward="Kongasis",
+        constituency="Chepalungu", county="Bomet",
+    ))
+    assert mismatches == []
+
+
+def test_apostrophe_style_does_not_matter_curly_or_straight():
+    """Same fix, curly apostrophe (’) instead of straight (') — form OCR/PDF
+    text can come out with either."""
+    detected = DetectedLocation(county="Bomet", constituency="Chepalungu", ward="Kong’asis",
+                                 polling_station="Saunet Primary School")
+    mismatches = location_mismatches(detected, _station(
+        station_name="Saunet Primary School", ward="Kongasis",
+        constituency="Chepalungu", county="Bomet",
+    ))
+    assert mismatches == []
