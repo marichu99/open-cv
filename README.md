@@ -8,6 +8,9 @@ in real time as submissions are approved. Covers all 6 elective positions
 real national geography (47 counties, 290 constituencies, ~1,450 wards,
 ~24.6k polling stations).
 
+**Live dashboard:** https://project-x-477317.web.app/dashboard — public,
+no account needed.
+
 This repo has two parts:
 
 - **CV research/training** (repo root) — `iebc_scrap.py`, `pdf_to_images.py`,
