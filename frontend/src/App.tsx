@@ -17,14 +17,12 @@ export default function App() {
         <AppShell>
           <Routes>
             <Route path="/" element={<SignupPage />} />
-            <Route
-              path="/dashboard"
-              element={
-                <ProtectedRoute>
-                  <DashboardPage />
-                </ProtectedRoute>
-              }
-            />
+            {/* Deliberately public — no ProtectedRoute — mirroring the
+                backend: every tally.py route is already unauthenticated
+                (see docs/DEPLOYMENT.md's public CDN caching). A parallel
+                vote tabulation is only worth anything if anyone can pull it
+                up and check it independently, not just logged-in roles. */}
+            <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/agent" element={<UploadPage />} />
             <Route path="/login" element={<LoginPage />} />
             {/* Folded into "/"'s role picker — kept as a redirect for anyone with the old link. */}
