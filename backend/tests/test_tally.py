@@ -165,6 +165,10 @@ def test_votes_by_station_lists_one_row_per_station_most_recent_first(client, ap
     assert station_names_in_order == ["Second Station", "Nyansiongo Pri Stream 1"]  # most recent first
     assert body["stations"][0]["votes"][candidate_id] == 50
     assert body["stations"][1]["votes"][candidate_id] == 100
+    # submission_id is what the dashboard's "download form" button links to
+    # (public-image route in api/submissions.py) — must be present and
+    # actually identify a real submission, not just any string.
+    assert all(s["submission_id"] for s in body["stations"])
 
 
 def test_votes_by_station_shows_a_separate_row_per_stream_of_the_same_station(client, app, geo):

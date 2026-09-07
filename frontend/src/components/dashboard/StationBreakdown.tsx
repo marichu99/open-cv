@@ -1,8 +1,10 @@
 import { Fragment, useState } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, Download } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Button } from "@/components/ui/button";
 import { CandidateBars } from "@/components/dashboard/CandidateBars";
 import { formatNumber } from "@/lib/utils";
+import { API_URL } from "@/lib/api";
 import type { VotesByStation } from "@/types";
 
 function formatTimestamp(iso: string | null): string {
@@ -89,6 +91,22 @@ export function StationBreakdown({ data }: { data: VotesByStation }) {
               {isOpen && (
                 <TableRow className="hover:bg-transparent">
                   <TableCell colSpan={5} className="bg-muted/30 py-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">
+                        Compare against the uploaded form to independently verify these figures.
+                      </span>
+                      <Button variant="outline" size="sm" asChild>
+                        <a
+                          href={`${API_URL}/api/submissions/${s.submission_id}/public-image`}
+                          download
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <Download className="size-3.5" />
+                          Download form
+                        </a>
+                      </Button>
+                    </div>
                     <CandidateBars
                       rows={[...data.candidates]
                         .map((c) => ({ label: c.full_name, votes: s.votes[c.candidate_id] ?? 0 }))

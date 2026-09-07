@@ -153,6 +153,7 @@ export interface Timeseries {
 }
 
 export interface StationTally {
+  submission_id: string;
   station_id: string;
   station_name: string;
   stream_number: number;
