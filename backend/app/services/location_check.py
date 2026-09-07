@@ -29,7 +29,14 @@ _GENERIC_TOKENS = {
 def _normalize(text: str | None) -> str:
     if not text:
         return ""
-    cleaned = re.sub(r"[^A-Z0-9 ]", " ", text.upper())
+    # Apostrophes mark a glottal stop within many Kenyan place names
+    # ("Kong'asis", "Ng'arua") rather than a word boundary, and forms/stored
+    # names are inconsistent about including them — strip them outright so
+    # "KONG'ASIS" and "KONGASIS" normalize to the same single token instead
+    # of the apostrophe splitting one of them into two tokens that then
+    # never overlap with the other's one.
+    without_apostrophes = re.sub(r"[’']", "", text.upper())
+    cleaned = re.sub(r"[^A-Z0-9 ]", " ", without_apostrophes)
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
