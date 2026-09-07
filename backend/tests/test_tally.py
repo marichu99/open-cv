@@ -196,6 +196,29 @@ def test_votes_by_station_shows_a_separate_row_per_stream_of_the_same_station(cl
         assert s["station_id"] == geo["station_id"]
 
 
+def test_votes_by_station_includes_uploader_and_stream_count(client, app, geo):
+    from app.extensions import db
+    from app.models import Candidate, PollingStation
+
+    position_id = geo["positions"]["president"]
+    with app.app_context():
+        candidate = Candidate(position_id=position_id, full_name="Candidate A", normalized_name="CANDIDATE A")
+        db.session.add(candidate)
+        station = db.session.get(PollingStation, geo["station_id"])
+        station.stream_count = 3
+        db.session.commit()
+        candidate_id = str(candidate.id)
+
+    _seed_approved(app, position_id, candidate_id, geo["station_id"], datetime.now(timezone.utc), 42, "uploader1")
+
+    resp = client.get(f"/api/tally/by_station?position_id={position_id}")
+    assert resp.status_code == 200
+    row = resp.get_json()["stations"][0]
+    assert row["agent_name"] == "Timeseries Agent"  # _seed_approved's agent
+    assert row["uploaded_at"] is not None
+    assert row["stream_count"] == 3
+
+
 def test_valid_groupings_depend_on_position_level(app, geo):
     from app.models import ElectivePosition
     from app.services.tally_service import valid_groupings

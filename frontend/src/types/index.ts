@@ -156,7 +156,10 @@ export interface StationTally {
   station_id: string;
   station_name: string;
   stream_number: number;
+  stream_count: number;
   reported_at: string | null;
+  uploaded_at: string | null;
+  agent_name: string | null;
   votes: Record<string, number>;
   total_votes_cast: number | null;
   rejected_ballots: number | null;
