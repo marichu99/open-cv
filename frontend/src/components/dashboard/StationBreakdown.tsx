@@ -7,7 +7,7 @@ import type { VotesByStation } from "@/types";
 
 function formatTimestamp(iso: string | null): string {
   if (!iso) return "—";
-  return new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return new Date(iso).toLocaleString([], { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 function leadingCandidate(votes: Record<string, number>, candidates: { candidate_id: string; full_name: string }[]) {
