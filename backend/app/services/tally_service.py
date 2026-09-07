@@ -189,6 +189,7 @@ def votes_by_station(position, scope_id=None):
 
     stations = [
         {
+            "submission_id": str(s.id),
             "station_id": str(s.station_id),
             "station_name": s.station.name,
             "stream_number": s.stream_number,

@@ -1,5 +1,6 @@
 import mimetypes
 import os
+import re
 from datetime import datetime, timezone
 
 from flask import Blueprint, request, jsonify, current_app, send_file, Response
@@ -13,6 +14,7 @@ from app.services.dedup import find_existing_approved, supersede
 from app.services.extraction_queue import enqueue_extraction
 from app.services.pdf import is_pdf, pdf_first_page_to_image
 from app.services.image_quality import looks_blank
+from app.utils.caching import cache_control
 from app.utils.errors import ApiError
 from app.utils.rbac import role_required
 
@@ -225,6 +227,26 @@ def get_submission(submission_id):
     return jsonify(submission.to_dict())
 
 
+def _image_response(submission: FormSubmission, as_attachment: bool = False):
+    """Shared by the authenticated single-submission route and the public
+    by-station-tally route below — same storage-backend branching either
+    way, just the attachment/filename behavior differs."""
+    download_name = None
+    if as_attachment:
+        ext = os.path.splitext(submission.image_path)[1] or ".jpg"
+        raw_station = re.sub(r"[^A-Za-z0-9]+", "-", submission.station.name).strip("-")
+        download_name = f"{raw_station}-form{submission.form_type}-stream{submission.stream_number}{ext}"
+
+    if current_app.config["STORAGE_BACKEND"] == "gcs":
+        data = GCSStorage(current_app.config["GCS_BUCKET_NAME"]).download_bytes(submission.image_path)
+        mimetype = mimetypes.guess_type(submission.image_path)[0] or "application/octet-stream"
+        resp = Response(data, mimetype=mimetype)
+        if as_attachment:
+            resp.headers["Content-Disposition"] = f'attachment; filename="{download_name}"'
+        return resp
+    return send_file(submission.image_path, as_attachment=as_attachment, download_name=download_name)
+
+
 @bp.get("/<uuid:submission_id>/image")
 @jwt_required()
 def get_image(submission_id):
@@ -233,8 +255,22 @@ def get_image(submission_id):
         raise ApiError("Not found", status_code=404)
     if str(submission.agent_id) != get_jwt_identity() and get_jwt().get("role") not in ("coordinator", "admin"):
         raise ApiError("Forbidden", status_code=403)
-    if current_app.config["STORAGE_BACKEND"] == "gcs":
-        data = GCSStorage(current_app.config["GCS_BUCKET_NAME"]).download_bytes(submission.image_path)
-        mimetype = mimetypes.guess_type(submission.image_path)[0] or "application/octet-stream"
-        return Response(data, mimetype=mimetype)
-    return send_file(submission.image_path)
+    return _image_response(submission)
+
+
+@bp.get("/<uuid:submission_id>/public-image")
+@cache_control("public, max-age=3600")
+def get_public_image(submission_id):
+    """Unauthenticated — the source form image for any submission that's
+    actually counting toward the public tally, so a dashboard viewer can
+    pull up the original photo/scan and check it against the extracted
+    numbers themselves (the whole point of a *parallel* vote tabulation:
+    independently verifiable, not just trust the dashboard). Scoped to
+    TALLIED_STATUSES only — same set votes_by_station() already draws
+    from — so a submission that's still pending review, rejected, flagged
+    as a duplicate, or failed extraction is never exposed here; 404 either
+    way (never leaking) rather than a distinguishable 403."""
+    submission = db.session.get(FormSubmission, submission_id)
+    if not submission or submission.status not in TALLIED_STATUSES:
+        raise ApiError("Not found", status_code=404)
+    return _image_response(submission, as_attachment=True)
