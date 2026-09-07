@@ -33,9 +33,13 @@ export function StationBreakdown({ data }: { data: VotesByStation }) {
   // Object URLs are only ever released on unmount, not when a preview is
   // toggled closed — cheap to keep around for a quick re-toggle, and this
   // panel's lifetime (one dashboard session) is short enough that holding a
-  // handful of them never meaningfully adds up.
+  // handful of them never meaningfully adds up. Synced in an effect (not
+  // during render) so the unmount cleanup below always sees the latest
+  // value without needing `previews` itself in its dependency array.
   const previewsRef = useRef(previews);
-  previewsRef.current = previews;
+  useEffect(() => {
+    previewsRef.current = previews;
+  }, [previews]);
   useEffect(() => {
     return () => {
       for (const p of Object.values(previewsRef.current)) {
@@ -168,7 +172,16 @@ export function StationBreakdown({ data }: { data: VotesByStation }) {
                       {showPreview && (
                         <div className="overflow-hidden rounded-md border border-border bg-background">
                           {preview?.status === "loaded" && preview.objectUrl && (
-                            <img src={preview.objectUrl} alt={`Submitted form for ${s.station_name}`} className="w-full object-contain" />
+                            // An iframe (not <img>) so the browser's native
+                            // image viewer handles zoom/pan — these scans
+                            // run several thousand pixels wide and the
+                            // handwritten vote counts need to be zoomable to
+                            // actually verify against the tally.
+                            <iframe
+                              src={preview.objectUrl}
+                              title={`Submitted form for ${s.station_name}`}
+                              className="h-[28rem] w-full"
+                            />
                           )}
                           {preview?.status === "loading" && (
                             <div className="flex h-48 items-center justify-center text-xs text-muted-foreground">Loading form…</div>
