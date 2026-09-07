@@ -1,5 +1,5 @@
-import { Fragment, useState } from "react";
-import { ChevronDown, ChevronRight, Download } from "lucide-react";
+import { Fragment, useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, Download, Eye, EyeOff } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { CandidateBars } from "@/components/dashboard/CandidateBars";
@@ -21,8 +21,28 @@ function leadingCandidate(votes: Record<string, number>, candidates: { candidate
   return best;
 }
 
+/** Preview state per row, keyed by rowKey — separate from `expanded` so
+ * closing/reopening the row doesn't refetch an image already pulled once. */
+type PreviewState = { status: "loading" | "loaded" | "error"; objectUrl?: string };
+
 export function StationBreakdown({ data }: { data: VotesByStation }) {
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [previews, setPreviews] = useState<Record<string, PreviewState>>({});
+  const [previewOpen, setPreviewOpen] = useState<Record<string, boolean>>({});
+
+  // Object URLs are only ever released on unmount, not when a preview is
+  // toggled closed — cheap to keep around for a quick re-toggle, and this
+  // panel's lifetime (one dashboard session) is short enough that holding a
+  // handful of them never meaningfully adds up.
+  const previewsRef = useRef(previews);
+  previewsRef.current = previews;
+  useEffect(() => {
+    return () => {
+      for (const p of Object.values(previewsRef.current)) {
+        if (p.objectUrl) URL.revokeObjectURL(p.objectUrl);
+      }
+    };
+  }, []);
 
   if (data.stations.length === 0) {
     return (
@@ -30,6 +50,26 @@ export function StationBreakdown({ data }: { data: VotesByStation }) {
         No stations have reported yet — each row here is one polling station's counted submission.
       </p>
     );
+  }
+
+  function togglePreview(rowKey: string, submissionId: string) {
+    setPreviewOpen((prev) => ({ ...prev, [rowKey]: !prev[rowKey] }));
+    if (previews[rowKey]) return; // already fetched (or in flight) once
+    setPreviews((prev) => ({ ...prev, [rowKey]: { status: "loading" } }));
+    // Public route (see api/submissions.py's get_public_image) — no auth
+    // header needed, unlike the coordinator review dialog's /image route.
+    fetch(`${API_URL}/api/submissions/${submissionId}/public-image`)
+      .then((res) => {
+        if (!res.ok) throw new Error(String(res.status));
+        return res.blob();
+      })
+      .then((blob) => {
+        const objectUrl = URL.createObjectURL(blob);
+        setPreviews((prev) => ({ ...prev, [rowKey]: { status: "loaded", objectUrl } }));
+      })
+      .catch(() => {
+        setPreviews((prev) => ({ ...prev, [rowKey]: { status: "error" } }));
+      });
   }
 
   // Many-aspirant races (10+ candidates) don't fit as table columns — each
@@ -52,6 +92,8 @@ export function StationBreakdown({ data }: { data: VotesByStation }) {
           const rowKey = `${s.station_id}-${s.stream_number}`;
           const isOpen = expanded === rowKey;
           const leader = leadingCandidate(s.votes, data.candidates);
+          const showPreview = !!previewOpen[rowKey];
+          const preview = previews[rowKey];
           // The station's *known* stream_count (not just how many streams
           // happen to be in the current result set) decides whether to show
           // "Stream N of M" — so a station with 3 streams reads as "Stream 1
@@ -91,27 +133,59 @@ export function StationBreakdown({ data }: { data: VotesByStation }) {
               {isOpen && (
                 <TableRow className="hover:bg-transparent">
                   <TableCell colSpan={5} className="bg-muted/30 py-4">
-                    <div className="mb-3 flex items-center justify-between">
+                    <div className="mb-3 flex items-center justify-between gap-3">
                       <span className="text-xs text-muted-foreground">
                         Compare against the uploaded form to independently verify these figures.
                       </span>
-                      <Button variant="outline" size="sm" asChild>
-                        <a
-                          href={`${API_URL}/api/submissions/${s.submission_id}/public-image`}
-                          download
-                          target="_blank"
-                          rel="noreferrer"
+                      <div className="flex shrink-0 gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            togglePreview(rowKey, s.submission_id);
+                          }}
                         >
-                          <Download className="size-3.5" />
-                          Download form
-                        </a>
-                      </Button>
+                          {showPreview ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+                          {showPreview ? "Hide preview" : "Preview form"}
+                        </Button>
+                        <Button variant="outline" size="sm" asChild>
+                          <a
+                            href={`${API_URL}/api/submissions/${s.submission_id}/public-image`}
+                            download
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <Download className="size-3.5" />
+                            Download form
+                          </a>
+                        </Button>
+                      </div>
                     </div>
-                    <CandidateBars
-                      rows={[...data.candidates]
-                        .map((c) => ({ label: c.full_name, votes: s.votes[c.candidate_id] ?? 0 }))
-                        .sort((a, b) => b.votes - a.votes)}
-                    />
+
+                    <div className={showPreview ? "grid gap-4 sm:grid-cols-[minmax(0,260px)_1fr]" : ""}>
+                      {showPreview && (
+                        <div className="overflow-hidden rounded-md border border-border bg-background">
+                          {preview?.status === "loaded" && preview.objectUrl && (
+                            <img src={preview.objectUrl} alt={`Submitted form for ${s.station_name}`} className="w-full object-contain" />
+                          )}
+                          {preview?.status === "loading" && (
+                            <div className="flex h-48 items-center justify-center text-xs text-muted-foreground">Loading form…</div>
+                          )}
+                          {preview?.status === "error" && (
+                            <div className="flex h-48 items-center justify-center px-4 text-center text-xs text-muted-foreground">
+                              Couldn't load the form image.
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      <CandidateBars
+                        rows={[...data.candidates]
+                          .map((c) => ({ label: c.full_name, votes: s.votes[c.candidate_id] ?? 0 }))
+                          .sort((a, b) => b.votes - a.votes)}
+                      />
+                    </div>
                   </TableCell>
                 </TableRow>
               )}
