@@ -201,17 +201,29 @@ export function StationBreakdown({ data }: { data: VotesByStation }) {
             <DialogTitle>{previewStation ? displayNameFor(previewStation) : ""}</DialogTitle>
             <DialogDescription>Submitted form — compare against the figures above.</DialogDescription>
           </DialogHeader>
-          <div className="overflow-hidden rounded-md border border-border bg-background">
+          <div className="flex max-h-[70vh] items-center justify-center overflow-hidden rounded-md border border-border bg-background">
             {previewState?.status === "loaded" && previewState.objectUrl && previewStation && (
-              // An iframe (not <img>) so the browser's native image viewer
-              // handles zoom/pan — these scans run several thousand pixels
-              // wide and the handwritten vote counts need to be zoomable to
-              // actually verify against the tally.
-              <iframe
-                src={previewState.objectUrl}
-                title={`Submitted form for ${previewStation.station_name}`}
-                className="h-[70vh] w-full"
-              />
+              // A plain <img> with object-contain, not an iframe — an
+              // iframe hands sizing to the browser's own "image document"
+              // fit heuristic, which isn't consistent enough to rely on
+              // (some of these scans are several thousand pixels tall, and
+              // the iframe ended up scrolling instead of fitting). This way
+              // the image is always scaled down to fit inside the modal,
+              // guaranteed by CSS rather than browser-internal behavior.
+              // Click through to the full-resolution original in a new tab
+              // for closer inspection than the fitted view allows.
+              <a
+                href={previewState.objectUrl}
+                target="_blank"
+                rel="noreferrer"
+                title="Open full resolution in a new tab"
+              >
+                <img
+                  src={previewState.objectUrl}
+                  alt={`Submitted form for ${previewStation.station_name}`}
+                  className="max-h-[70vh] w-auto max-w-full cursor-zoom-in object-contain"
+                />
+              </a>
             )}
             {previewState?.status === "loading" && (
               <div className="flex h-64 items-center justify-center text-xs text-muted-foreground">Loading form…</div>
