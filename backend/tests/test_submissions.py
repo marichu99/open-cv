@@ -384,6 +384,55 @@ def test_pdf_upload_is_converted_to_image(client, app, geo):
     assert image.data[:8] == b"\x89PNG\r\n\x1a\n"  # stored as PNG, not the original PDF bytes
 
 
+def test_public_image_available_once_a_submission_is_tallied(client, app, geo, monkeypatch):
+    """The by-station dashboard is public and unauthenticated (tally.py has
+    no @jwt_required anywhere), so the "download form" button next to it
+    must work with no token — but only once a submission actually counts
+    toward the public tally, matching exactly what votes_by_station()
+    already shows."""
+    from app.services import cv_pipeline, extraction as extraction_api
+
+    class CleanMock(cv_pipeline.MockExtractionService):
+        def extract(self, image_path, position, declared_form_type):
+            result = super().extract(image_path, position, declared_form_type)
+            for v in result.votes:
+                v.confidence = 0.97
+            result.total_votes_confidence = 0.97
+            result.rejected_ballots_confidence = 0.97
+            result.warnings = []
+            result.total_votes_cast = sum(v.votes for v in result.votes) + result.rejected_ballots
+            return result
+
+    monkeypatch.setattr(extraction_api, "get_extraction_service", lambda backend: CleanMock())
+
+    token, position_id = _login_agent(client, app, geo=geo)
+    draft = client.post(
+        "/api/submissions/draft",
+        data={"station_id": geo["station_id"], "position_id": position_id, "image": (fake_image_bytes(), "form.jpg")},
+        headers=_auth_headers(token),
+        content_type="multipart/form-data",
+    )
+    submission_id = draft.get_json()["id"]
+
+    # Not tallied yet (still a draft) — no auth header on any of these
+    # requests, since the whole point is that this route needs none.
+    still_draft = client.get(f"/api/submissions/{submission_id}/public-image")
+    assert still_draft.status_code == 404
+
+    final = client.post(f"/api/submissions/{submission_id}/finalize", headers=_auth_headers(token))
+    assert final.get_json()["status"] == "auto_approved"
+
+    public = client.get(f"/api/submissions/{submission_id}/public-image")
+    assert public.status_code == 200
+    assert public.data == b"fake-jpeg-bytes-for-testing"
+    assert "attachment" in public.headers["Content-Disposition"]
+
+
+def test_public_image_404s_for_a_nonexistent_submission(client, app):
+    resp = client.get("/api/submissions/00000000-0000-0000-0000-000000000000/public-image")
+    assert resp.status_code == 404
+
+
 def test_invalid_pdf_upload_is_rejected(client, app, geo):
     token, position_id = _login_agent(client, app, geo=geo)
     resp = client.post(
