@@ -163,8 +163,10 @@ def timeseries(position, scope_id=None, granularity: str | None = None):
         for candidate_id, delta in per_bucket[b].items():
             running[candidate_id] += delta
         series.append({"timestamp": b.isoformat(), "cumulative": {str(cid): total for cid, total in running.items()}})
+
+    ranked_candidates = sorted(candidates, key=lambda c: running[c.id], reverse=True)
     return {
-        "candidates": [{"candidate_id": str(c.id), "full_name": c.full_name} for c in candidates],
+        "candidates": [{"candidate_id": str(c.id), "full_name": c.full_name} for c in ranked_candidates],
         "series": series,
         "granularity": granularity,
     }
