@@ -27,6 +27,7 @@ export function TimeSeriesChart({ data }: { data: Timeseries }) {
         <XAxis dataKey="time" tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} axisLine={false} tickLine={false} />
         <YAxis tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} axisLine={false} tickLine={false} />
         <Tooltip
+          itemSorter={(item) => -(typeof item.value === "number" ? item.value : 0)}
           contentStyle={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12 }}
         />
         {data.candidates.map((c, i) => (
