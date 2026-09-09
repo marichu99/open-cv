@@ -17,6 +17,7 @@ from app.services.image_quality import looks_blank
 from app.utils.caching import cache_control
 from app.utils.errors import ApiError
 from app.utils.rbac import role_required
+from app.utils.validation import parse_vote_count
 
 bp = Blueprint("submissions", __name__, url_prefix="/api/submissions")
 
@@ -55,6 +56,28 @@ def create_draft():
     station = db.session.get(PollingStation, station_id)
     if not station:
         raise ApiError("Unknown polling station", status_code=404)
+
+    # An agent submits for the station they were posted to — nothing else.
+    # Previously only `position_id` was checked against the agent's
+    # assignment while `station_id` was taken from the request as-is, so any
+    # authenticated agent could file a result for any of the ~24,600 polling
+    # stations in the country. Agent.assigned_station_id already existed and
+    # is settable only by a campaign_manager/admin (see api/agents.py); this
+    # endpoint simply never consulted it.
+    #
+    # Deliberately strict on the unassigned case: an agent with no station is
+    # not "allowed everywhere", they are not yet deployed. Mirrors the
+    # no-position branch above.
+    if not agent.assigned_station_id:
+        raise ApiError(
+            "No polling station assigned yet — contact your campaign manager",
+            status_code=403,
+        )
+    if str(station.id) != str(agent.assigned_station_id):
+        raise ApiError(
+            "You can only submit forms for the polling station you're assigned to",
+            status_code=403,
+        )
 
     upload = request.files["image"]
     if is_pdf(upload):
@@ -152,7 +175,13 @@ def finalize(submission_id):
             record = by_candidate.get(str(correction.get("candidate_id")))
             if not record:
                 continue
-            record.votes_corrected = correction.get("votes_corrected")
+            # Bounded and non-negative. This value goes straight into
+            # tally_service.EFFECTIVE_VOTES, so an unvalidated Integer here
+            # meant a single agent could add 2,147,483,647 votes — or, with a
+            # negative, SUBTRACT from a candidate's national total.
+            record.votes_corrected = parse_vote_count(
+                correction.get("votes_corrected"), "Corrected vote count"
+            )
             record.manually_overridden = True
         db.session.add(
             VerificationLog(
