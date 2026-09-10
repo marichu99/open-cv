@@ -16,8 +16,16 @@ plan to review before running `gcloud`/`terraform apply` — but as of
   `tally333`. The connection string is in **Secret Manager** as
   `tally333-db-url` (Unix-socket form, matching the "Database — Cloud SQL"
   section below) — the password was generated at creation time and was never
-  printed or stored anywhere else. Schema migrations have been applied
-  (`flask db upgrade`, run via a one-off Cloud Run job, `tally333-db-migrate`).
+  printed or stored anywhere else. Schema migrations run automatically on
+  every deploy (`.github/workflows/deploy.yml`'s "Run database migration"
+  step re-points the standing Cloud Run Job `tally333-db-migrate` at the
+  commit just built, then executes it, before the services below pick up
+  that image) — `flask db upgrade` under the hood. This used to be a manual,
+  easy-to-forget step with a job left pointed at a stale image between runs
+  (see issue #24: a merged migration silently never applied, because the
+  job re-ran old migration code against the new schema and no-op'd instead
+  of erroring) — repointing the job's image on every deploy is what closes
+  that gap.
   National geography and elective positions are seeded too (47 counties,
   290 constituencies, ~1,450 wards, ~24.6k polling stations, all 6
   positions) — `flask --app wsgi import-geography`, run the same way via a
