@@ -3,7 +3,9 @@ import io
 from tests.conftest import fake_image_bytes, fake_pdf_bytes
 
 
-def _login_agent(client, app, phone="+254722000111", position_name="woman_representative", geo=None):
+def _login_agent(
+    client, app, phone="+254722000111", position_name="woman_representative", geo=None, station_id=None
+):
     reg = client.post("/api/auth/agents/register", json={"full_name": "J. Nyaboke", "phone_number": phone})
     otp = reg.get_json()["debug_otp"]
     verify = client.post("/api/auth/agents/verify", json={"phone_number": phone, "code": otp})
@@ -11,8 +13,10 @@ def _login_agent(client, app, phone="+254722000111", position_name="woman_repres
     agent_id = verify.get_json()["agent"]["id"]
 
     position_id = None
-    # A campaign manager assigns this in the real flow (see api/agents.py) —
-    # set it directly here so submission tests don't need the full RBAC dance.
+    # A campaign manager assigns these in the real flow (see api/agents.py) —
+    # set them directly here so submission tests don't need the full RBAC
+    # dance. Station AND position, because create_draft now enforces both:
+    # an agent may only submit for the station they were posted to.
     if geo:
         from app.extensions import db
         from app.models import Agent, ElectivePosition
@@ -21,6 +25,7 @@ def _login_agent(client, app, phone="+254722000111", position_name="woman_repres
         with app.app_context():
             agent = db.session.get(Agent, agent_id)
             agent.positions = [db.session.get(ElectivePosition, position_id)]
+            agent.assigned_station_id = station_id or geo["station_id"]
             db.session.commit()
 
     return token, position_id
@@ -802,3 +807,134 @@ def test_flagged_submissions_still_count_toward_tally_but_show_in_discrepancies_
     assert flagged_id in all_ids
     assert low_conf_id in all_ids
     assert clean_id in all_ids
+
+
+# --- Phase 0: an agent submits for their own station, with bounded figures.
+
+
+def _second_station(app, geo, name="Riakerati Pri Stream 1", code="WM102"):
+    from app.extensions import db
+    from app.models import PollingStation
+
+    with app.app_context():
+        station = PollingStation(ward_id=geo["ward_id"], iebc_code=code, name=name)
+        db.session.add(station)
+        db.session.commit()
+        return str(station.id)
+
+
+def test_agent_cannot_submit_for_a_station_they_are_not_assigned_to(client, app, geo):
+    """Before this, only position_id was checked against the agent's
+    assignment — station_id was taken from the request as-is, so any
+    authenticated agent could file an auto-approved result for any of the
+    ~24,600 polling stations in the country."""
+    token, position_id = _login_agent(client, app, geo=geo)
+    other_station = _second_station(app, geo)
+
+    resp = client.post(
+        "/api/submissions/draft",
+        data={
+            "station_id": other_station,
+            "position_id": position_id,
+            "image": (fake_image_bytes(), "form.jpg"),
+        },
+        headers=_auth_headers(token),
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 403
+    assert "assigned to" in resp.get_json()["error"]
+
+
+def test_agent_with_no_assigned_station_cannot_submit(client, app, geo):
+    """An agent without a station isn't 'allowed everywhere' — they aren't
+    deployed yet. Mirrors the existing no-position branch."""
+    from app.extensions import db
+    from app.models import Agent
+
+    token, position_id = _login_agent(client, app, geo=geo)
+    with app.app_context():
+        agent = Agent.query.filter_by(phone_number="+254722000111").first()
+        agent.assigned_station_id = None
+        db.session.commit()
+
+    resp = client.post(
+        "/api/submissions/draft",
+        data={
+            "station_id": geo["station_id"],
+            "position_id": position_id,
+            "image": (fake_image_bytes(), "form.jpg"),
+        },
+        headers=_auth_headers(token),
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 403
+    assert "No polling station assigned" in resp.get_json()["error"]
+
+
+def _draft_for_own_station(client, app, geo):
+    token, position_id = _login_agent(client, app, geo=geo)
+    resp = client.post(
+        "/api/submissions/draft",
+        data={
+            "station_id": geo["station_id"],
+            "position_id": position_id,
+            "image": (fake_image_bytes(), "form.jpg"),
+        },
+        headers=_auth_headers(token),
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 202
+    return token, resp.get_json()
+
+
+def _finalize_with_correction(client, token, submission, votes):
+    return client.post(
+        f"/api/submissions/{submission['id']}/finalize",
+        json={
+            "corrections": [
+                {"candidate_id": submission["vote_records"][0]["candidate_id"], "votes_corrected": votes}
+            ]
+        },
+        headers=_auth_headers(token),
+    )
+
+
+def test_finalize_rejects_a_negative_vote_correction(client, app, geo):
+    """A negative doesn't just fail validation — tally_service sums
+    coalesce(votes_corrected, votes_detected), so it would SUBTRACT from a
+    candidate's national total."""
+    token, submission = _draft_for_own_station(client, app, geo)
+    resp = _finalize_with_correction(client, token, submission, -50000)
+    assert resp.status_code == 400
+    assert "cannot be negative" in resp.get_json()["error"]
+
+
+def test_finalize_rejects_an_absurdly_large_vote_correction(client, app, geo):
+    """votes_corrected was an unbounded Integer written straight from request
+    JSON — one agent could add 2,147,483,647 votes to the national tally."""
+    token, submission = _draft_for_own_station(client, app, geo)
+    resp = _finalize_with_correction(client, token, submission, 2147483647)
+    assert resp.status_code == 400
+    assert "exceeds the maximum" in resp.get_json()["error"]
+
+
+def test_finalize_rejects_a_non_integer_vote_correction(client, app, geo):
+    token, submission = _draft_for_own_station(client, app, geo)
+    assert _finalize_with_correction(client, token, submission, "500").status_code == 400
+    # bool is an int subclass in Python, so JSON `true` would otherwise be 1 vote
+    assert _finalize_with_correction(client, token, submission, True).status_code == 400
+
+
+def test_finalize_still_accepts_a_legitimate_correction(client, app, geo):
+    """The gate must not break the actual use case: an agent fixing a misread
+    digit on their own form before confirming it."""
+    token, submission = _draft_for_own_station(client, app, geo)
+    resp = _finalize_with_correction(client, token, submission, 431)
+    assert resp.status_code == 200
+    corrected = next(
+        v for v in resp.get_json()["vote_records"]
+        if v["candidate_id"] == submission["vote_records"][0]["candidate_id"]
+    )
+    assert corrected["votes_corrected"] == 431
+    assert corrected["effective_votes"] == 431
+    assert corrected["manually_overridden"] is True

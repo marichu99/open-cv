@@ -16,9 +16,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { agent, logout } = useAuth();
 
   if (agent) {
-    const navItems = SIDEBAR_NAV.filter((item) => !item.roles || item.roles.includes(agent.role));
+    // effective_role — a pending account must not be shown management nav it
+    // can't actually use (see ProtectedRoute).
+    const navItems = SIDEBAR_NAV.filter(
+      (item) => !item.roles || item.roles.some((r) => r === agent.effective_role),
+    );
     return (
-      <SidebarShell navItems={navItems} userName={agent.full_name} role={agent.role} onLogout={logout}>
+      <SidebarShell
+        navItems={navItems}
+        userName={agent.full_name}
+        role={agent.awaiting_activation ? `${agent.role} · pending approval` : agent.role}
+        onLogout={logout}
+      >
         <div className="mx-auto max-w-6xl">{children}</div>
       </SidebarShell>
     );

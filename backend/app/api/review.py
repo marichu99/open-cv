@@ -9,6 +9,7 @@ from app.models.submission import REVIEW_ACTIONS, TALLIED_STATUSES
 from app.services.dedup import supersede
 from app.utils.errors import ApiError
 from app.utils.rbac import role_required
+from app.utils.validation import parse_vote_count
 
 bp = Blueprint("review", __name__, url_prefix="/api/submissions")
 
@@ -39,7 +40,12 @@ def review_submission(submission_id):
             record: VoteRecord = by_candidate.get(str(correction.get("candidate_id")))
             if not record:
                 continue
-            record.votes_corrected = correction.get("votes_corrected")
+            # Same bound as the agent-facing path in api/submissions.py — a
+            # coordinator correcting a misread digit is the intended use, and
+            # neither a negative nor a nine-digit figure is that.
+            record.votes_corrected = parse_vote_count(
+                correction.get("votes_corrected"), "Corrected vote count"
+            )
             record.manually_overridden = True
         db.session.add(
             VerificationLog(

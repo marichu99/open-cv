@@ -16,3 +16,6 @@ PyMuPDF==1.24.14
 anthropic==1.0.0
 google-cloud-storage==2.18.2
 google-cloud-tasks==2.16.4
+# Already arrives transitively with the two above; declared explicitly because
+# app/api/internal.py imports it directly to verify Cloud Tasks OIDC tokens.
+google-auth==2.34.0

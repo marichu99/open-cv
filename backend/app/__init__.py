@@ -2,7 +2,7 @@ import logging
 
 from flask import Flask, jsonify
 
-from app.config import Config
+from app.config import Config, validate_production_config
 from app.extensions import db, migrate, jwt, cors, socketio
 from app.utils.errors import register_error_handlers
 
@@ -11,8 +11,14 @@ def create_app(config_object: type = Config) -> Flask:
     app = Flask(__name__, instance_relative_config=True)
     app.config.from_object(config_object)
 
-    # INFO-level logs (e.g. OTP codes in services/otp.py) reach `docker compose
-    # logs backend` / gunicorn's stdout even when DEBUG is off.
+    # Before anything is wired up: refuse to serve production traffic with
+    # placeholder secrets, DEBUG on, or the mock extractor. See config.py.
+    validate_production_config(app)
+
+    # INFO-level logs reach `docker compose logs backend` / gunicorn's stdout
+    # (and therefore Cloud Logging) even when DEBUG is off. That is exactly why
+    # services/otp.py no longer logs OTP codes at this level — anything emitted
+    # here should be assumed readable by every holder of roles/logging.viewer.
     logging.basicConfig(level=logging.INFO)
 
     db.init_app(app)

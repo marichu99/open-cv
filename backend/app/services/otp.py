@@ -1,9 +1,10 @@
 """OTP generation/verification for agent verification.
 
 Delivery is over SMTP (see services/email.py) when the agent has an email
-on file; the code is also returned in the API response when DEBUG is on,
-and always logged server-side — so a missing email or unconfigured SMTP
-server never blocks signup/login in dev.
+on file. When DEBUG is on the code is also returned in the API response and
+logged server-side, so a missing email or unconfigured SMTP server never
+blocks signup/login in dev. With DEBUG off the code is never logged — see
+generate_and_send_otp.
 
 Email is sent from a background thread so a slow/unreachable SMTP server
 never adds latency to the request — the OTP row is already committed by
@@ -14,6 +15,8 @@ import logging
 import random
 import threading
 from datetime import datetime, timedelta, timezone
+
+from flask import current_app
 
 from app.extensions import db
 from app.models.agent import OtpCode
@@ -43,7 +46,16 @@ def generate_and_send_otp(phone_number: str, email: str | list[str] | None = Non
     db.session.add(otp)
     db.session.commit()
 
-    logger.info("OTP for %s: %s (expires in %sm)", phone_number, code, OTP_TTL_MINUTES)
+    # NEVER log the code outside debug. On Cloud Run this logger's output is
+    # Cloud Logging, and app/__init__.py's basicConfig(level=INFO) means INFO
+    # survives with DEBUG off — so the previous unconditional
+    # `logger.info("OTP for %s: %s", ...)` published a live sign-in code for
+    # every account, admin included, to anyone holding roles/logging.viewer.
+    # That was the cheapest full-compromise path in the system.
+    if current_app.debug:
+        logger.info("OTP for %s: %s (expires in %sm)", phone_number, code, OTP_TTL_MINUTES)
+    else:
+        logger.info("OTP issued for %s (expires in %sm)", phone_number, OTP_TTL_MINUTES)
     recipients = [email] if isinstance(email, str) else (email or [])
     for addr in recipients:
         _dispatch_email(addr, code)

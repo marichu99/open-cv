@@ -9,16 +9,25 @@ from app.utils.phone import normalize_phone_number
 
 bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
-# Campaign managers can assign agents to any station/position, so every code
-# — signup or sign-in, no matter who's asking — always goes to this one
-# inbox too, on top of the campaign manager's own address: someone holding
-# this inbox has to be able to see every code, even ones meant for someone
-# else's account, so a rogue signup can't go unnoticed.
+# Campaign-manager codes are copied to this inbox as a MONITORING channel:
+# it means a rogue signup or sign-in can't go unnoticed by the team.
+#
+# It is explicitly NOT a second factor, and earlier comments here claimed it
+# was. verify_agent() below needs only (phone_number, code) and never proves
+# control of any mailbox — so copying one code to two addresses is an OR, not
+# an AND: whoever holds EITHER inbox can complete a sign-in. Privilege is
+# gated by admin activation (see Agent.effective_role), not by this address.
+#
+# TODO: this is an unrotatable personal address hardcoded in source; moving it
+# to a config value / team alias is tracked as Phase 3 work.
 CAMPAIGN_MANAGER_OTP_EMAIL = "marichufx@gmail.com"
 
 
 def _issue_token(agent: Agent):
-    claims = {"role": agent.role, "full_name": agent.full_name}
+    # effective_role, never agent.role — a self-registered privileged account
+    # that no admin has activated must carry the inert PENDING_ROLE claim.
+    # rbac.role_required() reads this claim, so the gate needs nothing else.
+    claims = {"role": agent.effective_role, "full_name": agent.full_name}
     token = create_access_token(identity=str(agent.id), additional_claims=claims)
     return {"access_token": token, "agent": agent.to_dict()}
 
@@ -89,10 +98,18 @@ def register_agent():
 
 @bp.post("/campaign_managers/register")
 def register_campaign_manager():
-    """Campaign manager signup. The OTP goes to the registrant's own email
-    *and* to CAMPAIGN_MANAGER_OTP_EMAIL — the fixed inbox always sees it too,
-    so a campaign manager account can never be signed into by someone who
-    only controls one of the two addresses."""
+    """Campaign manager signup — open to anyone, but the role is INERT until
+    an admin activates it (PATCH /api/agents/:id/activation).
+
+    Signing up and verifying yields a token carrying PENDING_ROLE, which
+    matches no role_required(...) anywhere, so a self-registered account can
+    see its own pending status and nothing else. Before the activation gate,
+    this endpoint handed any anonymous caller the ability to reassign every
+    agent in the country and dump every agent's PII via GET /api/agents.
+
+    The OTP is also copied to CAMPAIGN_MANAGER_OTP_EMAIL so the team sees
+    signups as they happen — a monitoring channel, not a second factor; see
+    the note on that constant."""
     data = request.get_json(force=True) or {}
     full_name = (data.get("full_name") or "").strip()
     phone_number = normalize_phone_number(data.get("phone_number") or "")
@@ -121,7 +138,14 @@ def register_campaign_manager():
     db.session.commit()
 
     code = generate_and_send_otp(phone_number, email=[email, CAMPAIGN_MANAGER_OTP_EMAIL])
-    response = {"message": f"OTP sent to {email} and {CAMPAIGN_MANAGER_OTP_EMAIL}", "phone_number": phone_number}
+    response = {
+        "message": (
+            f"OTP sent to {email} and {CAMPAIGN_MANAGER_OTP_EMAIL}. "
+            "Your account needs an admin to activate it before you can manage agents."
+        ),
+        "phone_number": phone_number,
+        "awaiting_activation": agent.awaiting_activation,
+    }
     if current_app.debug:
         response["debug_otp"] = code  # never exposed outside debug mode
     return jsonify(response), 201
@@ -179,5 +203,9 @@ def me():
     if not agent:
         raise ApiError("Not found", status_code=404)
     data = agent.to_dict()
-    data["role"] = get_jwt().get("role", agent.role)
+    # `role` stays the account's actual role (what you are). `effective_role`
+    # comes from the live token (what this session can currently do) so a
+    # just-activated user still sees "pending" until they re-authenticate —
+    # matching what rbac.role_required will actually let them through.
+    data["effective_role"] = get_jwt().get("role", agent.effective_role)
     return jsonify(data)

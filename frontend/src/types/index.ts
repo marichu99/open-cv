@@ -1,12 +1,23 @@
 export type Role = "agent" | "campaign_manager" | "coordinator" | "admin" | "viewer";
 
+/** What a session may actually *do*. A privileged account that no admin has
+ *  activated yet carries "pending", which matches no server-side
+ *  role_required(...) — so every privileged call would 403. Always gate UI on
+ *  this, never on `role`. */
+export type EffectiveRole = Role | "pending";
+
 export interface Agent {
   id: string;
   full_name: string;
   phone_number: string;
   email: string | null;
   phone_verified: boolean;
+  /** The role the account *is* — for display. */
   role: Role;
+  /** What it can currently *do*. Differs from `role` only while pending. */
+  effective_role: EffectiveRole;
+  awaiting_activation: boolean;
+  activated_at: string | null;
   assigned_station_id: string | null;
   position_ids: string[];
 }

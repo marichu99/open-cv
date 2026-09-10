@@ -239,8 +239,9 @@ export function SignupPage() {
 
                   {role === "campaign_manager" && (
                     <p className="rounded-md bg-muted/60 p-2.5 text-xs text-muted-foreground">
-                      For security, sign-in codes also always go to a fixed inbox someone on your team controls, in
-                      addition to your email above.
+                      An admin has to approve this account before you can manage agents — you'll be able to sign in
+                      straight away, but management stays locked until then. Sign-in codes are also copied to a fixed
+                      team inbox so new sign-ups are visible to the team.
                     </p>
                   )}
 

@@ -1,7 +1,11 @@
+from datetime import datetime, timezone
+
 from flask import Blueprint, jsonify, request
+from flask_jwt_extended import get_jwt
 
 from app.extensions import db
 from app.models import Agent, ElectivePosition, PollingStation, Ward, Constituency, County
+from app.models.agent import PRIVILEGED_ROLES
 from app.utils.errors import ApiError
 from app.utils.rbac import role_required
 
@@ -31,10 +35,58 @@ def _serialize(agent: Agent):
 @bp.get("")
 @role_required("campaign_manager", "admin")
 def list_agents():
-    """Field agents only — campaign managers assign stations/positions to
-    agents, not to other coordinators/admins/viewers."""
-    agents = Agent.query.filter_by(role="agent").order_by(Agent.full_name).all()
-    return jsonify([_serialize(a) for a in agents])
+    """Field agents by default — campaign managers assign stations/positions
+    to agents, not to other coordinators/admins/viewers.
+
+    `?role=` widens this so an admin can find the self-registered
+    campaign-manager accounts waiting on activation. Restricted to admins:
+    letting a campaign manager enumerate other campaign managers, coordinators
+    and admins would hand them the phone numbers and emails of exactly the
+    accounts worth targeting (every role signs in with a code to the address
+    on file — see api/auth.py).
+    """
+    role = request.args.get("role", "agent")
+    if role != "agent" and get_jwt().get("role") != "admin":
+        raise ApiError("Only an admin can list accounts other than field agents", status_code=403)
+
+    q = Agent.query.filter_by(role=role)
+    if request.args.get("awaiting_activation") == "true":
+        q = q.filter(Agent.activated_at.is_(None))
+    return jsonify([_serialize(a) for a in q.order_by(Agent.full_name).all()])
+
+
+@bp.patch("/<uuid:agent_id>/activation")
+@role_required("admin")
+def set_activation(agent_id):
+    """Activates (or suspends) a privileged account — the gate that makes open
+    campaign-manager signup safe. Until `activated_at` is set, api/auth.py
+    issues that account a PENDING_ROLE token that satisfies no
+    role_required(...) anywhere, so it can sign in and see its own status and
+    nothing else.
+
+    Admin-only on purpose: a campaign manager must not be able to activate
+    other campaign managers, or the gate is self-service again.
+
+    Suspending (`activated: false`) takes effect on the account's NEXT token —
+    existing JWTs stay valid for up to JWT_ACCESS_TOKEN_EXPIRES because there
+    is no revocation list yet (Phase 3.4). Rotate JWT_SECRET_KEY if you need a
+    suspension to bite immediately.
+    """
+    agent = db.session.get(Agent, agent_id)
+    if not agent:
+        raise ApiError("Not found", status_code=404)
+    if agent.role not in PRIVILEGED_ROLES:
+        raise ApiError(f"{agent.role} accounts don't require activation", status_code=400)
+
+    data = request.get_json(force=True, silent=True) or {}
+    if "activated" not in data:
+        raise ApiError("activated (true/false) is required")
+    if not isinstance(data["activated"], bool):
+        raise ApiError("activated must be true or false")
+
+    agent.activated_at = datetime.now(timezone.utc) if data["activated"] else None
+    db.session.commit()
+    return jsonify(_serialize(agent))
 
 
 @bp.patch("/<uuid:agent_id>/assignment")

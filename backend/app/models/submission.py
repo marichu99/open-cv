@@ -1,5 +1,5 @@
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import CheckConstraint, UniqueConstraint
 
 from app.extensions import db
 from app.models.base import uuid_pk, utcnow
@@ -15,10 +15,29 @@ REVIEW_ACTIONS = ("auto_flag", "manual_correct", "approve", "reject", "mark_dupl
 #: statuses whose votes count toward the live tally
 TALLIED_STATUSES = ("auto_approved", "manually_approved")
 
+#: Absolute sanity ceiling for any single vote figure on one station form.
+#: Not a business rule — a real Kenyan polling stream is capped in the low
+#: hundreds of voters — just a bound that keeps a misread digit or a forged
+#: figure from moving a national total by billions. `votes_corrected` was
+#: previously an unbounded Integer written straight from request JSON, so
+#: 2^31-1 (and negatives, which SUBTRACT via tally_service.EFFECTIVE_VOTES)
+#: were both storable. The real per-station bound is `registered_voters`,
+#: enforced separately in Phase 1. Keep in sync with migration c3f1a72b9d84.
+MAX_VOTES_PER_FIELD = 100_000
+
 
 class FormSubmission(db.Model):
     __tablename__ = "form_submission"
-    __table_args__ = (UniqueConstraint("station_id", "form_type", "image_sha256"),)
+    __table_args__ = (
+        UniqueConstraint("station_id", "form_type", "image_sha256"),
+        CheckConstraint(
+            f"(total_votes_cast IS NULL OR "
+            f"(total_votes_cast >= 0 AND total_votes_cast <= {MAX_VOTES_PER_FIELD})) AND "
+            f"(rejected_ballots IS NULL OR "
+            f"(rejected_ballots >= 0 AND rejected_ballots <= {MAX_VOTES_PER_FIELD}))",
+            name="ck_form_submission_totals_range",
+        ),
+    )
 
     id = uuid_pk()
     station_id = db.Column(UUID(as_uuid=True), db.ForeignKey("polling_station.id"), nullable=False)
@@ -89,7 +108,18 @@ class FormSubmission(db.Model):
 
 class VoteRecord(db.Model):
     __tablename__ = "vote_record"
-    __table_args__ = (UniqueConstraint("submission_id", "candidate_id"),)
+    __table_args__ = (
+        UniqueConstraint("submission_id", "candidate_id"),
+        CheckConstraint(
+            f"votes_detected >= 0 AND votes_detected <= {MAX_VOTES_PER_FIELD}",
+            name="ck_vote_record_votes_detected_range",
+        ),
+        CheckConstraint(
+            f"votes_corrected IS NULL OR "
+            f"(votes_corrected >= 0 AND votes_corrected <= {MAX_VOTES_PER_FIELD})",
+            name="ck_vote_record_votes_corrected_range",
+        ),
+    )
 
     id = uuid_pk()
     submission_id = db.Column(UUID(as_uuid=True), db.ForeignKey("form_submission.id"), nullable=False)
