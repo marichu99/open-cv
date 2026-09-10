@@ -58,6 +58,26 @@ jobs:
           docker build -t "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/tally333/backend:${{ github.sha }}" ./backend
           docker push "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/tally333/backend:${{ github.sha }}"
 
+      # tally333-db-migrate (see docs/DEPLOYMENT.md) is a standing Cloud Run
+      # Job reused across deploys rather than recreated — left pointed at
+      # whatever image it last ran, it silently drifts behind every new
+      # commit (gcloud run jobs execute has no --image override, so an
+      # un-updated job just re-runs old migration code against the new
+      # schema expectations, no-ops, and reports success). Repointing it at
+      # this build right before running it, every deploy, is what keeps
+      # `flask db upgrade` actually current instead of an inert no-op — see
+      # the incident in issue #24. Runs before the services below so a new
+      # revision never queries a column the DB doesn't have yet.
+      - name: Run database migration
+        run: |
+          gcloud run jobs update tally333-db-migrate \
+            --image "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/tally333/backend:${{ github.sha }}" \
+            --region "${{ env.REGION }}" \
+            --quiet
+          gcloud run jobs execute tally333-db-migrate \
+            --region "${{ env.REGION }}" \
+            --wait
+
       # All three share the image but are separate Cloud Run *services* with
       # independent revision history — deploying tally333-api does NOT
       # redeploy tally333-realtime or tally333-extraction-worker. Redeploying
