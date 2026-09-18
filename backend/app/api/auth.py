@@ -9,8 +9,10 @@ from app.utils.phone import normalize_phone_number
 
 bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
-# Campaign-manager codes are copied to this inbox as a MONITORING channel:
-# it means a rogue signup or sign-in can't go unnoticed by the team.
+# Privileged-signup codes (campaign manager, aspirant) are copied to this
+# inbox as a MONITORING channel: it means a rogue signup or sign-in can't go
+# unnoticed by the team. The name is historical — it now covers every role
+# that self-registers into PRIVILEGED_ROLES, not just campaign managers.
 #
 # It is explicitly NOT a second factor, and earlier comments here claimed it
 # was. verify_agent() below needs only (phone_number, code) and never proves
@@ -21,6 +23,10 @@ bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 # TODO: this is an unrotatable personal address hardcoded in source; moving it
 # to a config value / team alias is tracked as Phase 3 work.
 CAMPAIGN_MANAGER_OTP_EMAIL = "marichufx@gmail.com"
+
+#: Roles whose sign-in/sign-up codes are always mirrored to the monitoring
+#: inbox above, on top of the account's own address.
+_MONITORED_ROLES = ("campaign_manager", "aspirant")
 
 
 def _issue_token(agent: Agent):
@@ -34,14 +40,14 @@ def _issue_token(agent: Agent):
 
 def _otp_email_for(agent: Agent) -> str | list[str]:
     """Every role signs in with a one-time code, emailed to the address on
-    file — campaign managers additionally always get it at the fixed inbox
-    above, so it's never solely in one person's control."""
+    file — monitored roles (see _MONITORED_ROLES) additionally always get it
+    at the fixed inbox above, so it's never solely in one person's control."""
     if not agent.email:
         raise ApiError(
             "No email on file for this account — ask an admin to add one before you can sign in",
             status_code=400,
         )
-    if agent.role == "campaign_manager":
+    if agent.role in _MONITORED_ROLES:
         return [agent.email, CAMPAIGN_MANAGER_OTP_EMAIL]
     return agent.email
 
@@ -142,6 +148,57 @@ def register_campaign_manager():
         "message": (
             f"OTP sent to {email} and {CAMPAIGN_MANAGER_OTP_EMAIL}. "
             "Your account needs an admin to activate it before you can manage agents."
+        ),
+        "phone_number": phone_number,
+        "awaiting_activation": agent.awaiting_activation,
+    }
+    if current_app.debug:
+        response["debug_otp"] = code  # never exposed outside debug mode
+    return jsonify(response), 201
+
+
+@bp.post("/aspirants/register")
+def register_aspirant():
+    """Aspirant (candidate) signup — open to anyone, but the role is INERT
+    until an admin activates it (PATCH /api/agents/:id/activation), exactly
+    like register_campaign_manager below. This account reads every
+    submission, image, and correction log system-wide once activated, so the
+    activation gate matters even more here than for a campaign manager.
+
+    The OTP is also copied to CAMPAIGN_MANAGER_OTP_EMAIL so the team sees the
+    signup as it happens — a monitoring channel, not a second factor; see the
+    note on that constant."""
+    data = request.get_json(force=True) or {}
+    full_name = (data.get("full_name") or "").strip()
+    phone_number = normalize_phone_number(data.get("phone_number") or "")
+    email = (data.get("email") or "").strip().lower() or None
+    if not full_name or not phone_number or not email:
+        raise ApiError("full_name, phone_number, and email are required")
+    _validate_and_check_email(email, phone_number)
+
+    agent = Agent.query.filter_by(phone_number=phone_number).first()
+    # Same guard as agent/campaign-manager signup: a phone number that
+    # already started as some other role can't be reclaimed as an aspirant
+    # with the same number.
+    if agent and agent.role != "aspirant":
+        raise ApiError("This phone number is already registered under a different role — sign in instead", status_code=409)
+    if agent and agent.phone_verified_at is not None:
+        raise ApiError("Phone number already registered — sign in instead", status_code=409)
+
+    if not agent:
+        agent = Agent(full_name=full_name, phone_number=phone_number, role="aspirant")
+        db.session.add(agent)
+    else:
+        agent.full_name = full_name
+
+    agent.email = email
+    db.session.commit()
+
+    code = generate_and_send_otp(phone_number, email=[email, CAMPAIGN_MANAGER_OTP_EMAIL])
+    response = {
+        "message": (
+            f"OTP sent to {email} and {CAMPAIGN_MANAGER_OTP_EMAIL}. "
+            "Your account needs an admin to activate it before you can view results."
         ),
         "phone_number": phone_number,
         "awaiting_activation": agent.awaiting_activation,

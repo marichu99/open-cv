@@ -16,10 +16,24 @@ from app.services.pdf import is_pdf, pdf_first_page_to_image
 from app.services.image_quality import looks_blank
 from app.utils.caching import cache_control
 from app.utils.errors import ApiError
-from app.utils.rbac import role_required
 from app.utils.validation import parse_vote_count
 
 bp = Blueprint("submissions", __name__, url_prefix="/api/submissions")
+
+
+def can_view_submission(submission: FormSubmission, identity: str, role: str) -> bool:
+    """Who may read a submission's detail/image/logs. `aspirant` is unscoped
+    (the candidate's own account, sees everything); `campaign_manager` is
+    scoped to submissions from agents *they* assigned (Agent.assigned_by —
+    see api/agents.py's assign_station); `agent` only ever sees their own
+    upload, same as before this function existed."""
+    if role in ("coordinator", "admin", "aspirant"):
+        return True
+    if role == "campaign_manager":
+        return submission.agent is not None and str(submission.agent.assigned_by) == str(identity)
+    if role == "agent":
+        return str(submission.agent_id) == str(identity)
+    return False
 
 
 def _arithmetic_ok(submission: FormSubmission) -> bool:
@@ -175,6 +189,7 @@ def finalize(submission_id):
             record = by_candidate.get(str(correction.get("candidate_id")))
             if not record:
                 continue
+            old_value = record.effective_votes
             # Bounded and non-negative. This value goes straight into
             # tally_service.EFFECTIVE_VOTES, so an unvalidated Integer here
             # meant a single agent could add 2,147,483,647 votes — or, with a
@@ -183,14 +198,21 @@ def finalize(submission_id):
                 correction.get("votes_corrected"), "Corrected vote count"
             )
             record.manually_overridden = True
-        db.session.add(
-            VerificationLog(
-                submission_id=submission.id,
-                reviewer_id=get_jwt_identity(),
-                action="manual_correct",
-                notes="Corrected by the submitting agent before finalizing",
+            # One row per corrected candidate, carrying the actual old/new
+            # figures — not one row for the whole batch — so a CM/aspirant
+            # reading the log later sees exactly what changed, even if a
+            # later coordinator correction overwrites votes_corrected again.
+            db.session.add(
+                VerificationLog(
+                    submission_id=submission.id,
+                    reviewer_id=get_jwt_identity(),
+                    action="manual_correct",
+                    notes="Corrected by the submitting agent before finalizing",
+                    candidate_id=record.candidate_id,
+                    old_value=old_value,
+                    new_value=record.votes_corrected,
+                )
             )
-        )
 
     threshold = current_app.config["CONFIDENCE_THRESHOLD"]
     duplicate = find_existing_approved(
@@ -226,9 +248,17 @@ def finalize(submission_id):
 
 
 @bp.get("")
-@role_required("coordinator", "admin")
+@jwt_required()
 def list_submissions():
+    role = get_jwt().get("role")
+    if role not in ("coordinator", "admin", "aspirant", "campaign_manager"):
+        raise ApiError("Forbidden", status_code=403)
+
     q = FormSubmission.query
+    if role == "campaign_manager":
+        # Scoped to submissions from agents *this* campaign manager assigned
+        # — see can_view_submission's docstring for why.
+        q = q.join(Agent, FormSubmission.agent_id == Agent.id).filter(Agent.assigned_by == get_jwt_identity())
     status = request.args.get("status")
     station_id = request.args.get("station_id")
     has_warnings = request.args.get("has_warnings")
@@ -251,7 +281,7 @@ def get_submission(submission_id):
     submission = db.session.get(FormSubmission, submission_id)
     if not submission:
         raise ApiError("Not found", status_code=404)
-    if str(submission.agent_id) != get_jwt_identity() and get_jwt().get("role") not in ("coordinator", "admin"):
+    if not can_view_submission(submission, get_jwt_identity(), get_jwt().get("role")):
         raise ApiError("Forbidden", status_code=403)
     return jsonify(submission.to_dict())
 
@@ -282,7 +312,7 @@ def get_image(submission_id):
     submission = db.session.get(FormSubmission, submission_id)
     if not submission:
         raise ApiError("Not found", status_code=404)
-    if str(submission.agent_id) != get_jwt_identity() and get_jwt().get("role") not in ("coordinator", "admin"):
+    if not can_view_submission(submission, get_jwt_identity(), get_jwt().get("role")):
         raise ApiError("Forbidden", status_code=403)
     return _image_response(submission)
 

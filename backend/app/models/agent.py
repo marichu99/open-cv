@@ -3,16 +3,19 @@ from sqlalchemy.dialects.postgresql import UUID
 from app.extensions import db
 from app.models.base import uuid_pk, utcnow
 
-ROLES = ("agent", "campaign_manager", "coordinator", "admin", "viewer")
+ROLES = ("agent", "campaign_manager", "coordinator", "admin", "viewer", "aspirant")
 
 #: Roles that can act on other people's data — assign agents to stations,
 #: moderate submissions, manage candidates. Signup for these is open (see
-#: api/auth.py's register_campaign_manager) but the role is inert until an
-#: admin sets `activated_at`; until then the JWT carries PENDING_ROLE.
+#: api/auth.py's register_campaign_manager/register_aspirant) but the role
+#: is inert until an admin sets `activated_at`; until then the JWT carries
+#: PENDING_ROLE. `aspirant` is here too — it's the candidate's own account,
+#: which reads every submission/image/log unscoped, so a self-registered
+#: impostor must not get that for free.
 #: Plain "agent" is deliberately not here — an agent already can't do
 #: anything until a campaign manager assigns them a position, so gating
 #: them twice would just break field onboarding.
-PRIVILEGED_ROLES = ("campaign_manager", "coordinator", "admin")
+PRIVILEGED_ROLES = ("campaign_manager", "coordinator", "admin", "aspirant")
 
 #: The role claim issued to a privileged account that hasn't been activated
 #: yet. It matches no `role_required(...)` anywhere, so it grants nothing —
@@ -37,7 +40,10 @@ class Agent(db.Model):
     in api/auth.py's CAMPAIGN_MANAGER_OTP_EMAIL, on top of their own
     address. `assigned_station_id`/`positions` are set exclusively by a
     campaign_manager/admin (see api/agents.py) — never by the agent
-    themselves, not even at signup."""
+    themselves, not even at signup. `assigned_by` records which campaign
+    manager last set that assignment, which is what scopes a campaign
+    manager's read access to submissions/images/logs to their own agents
+    (see app/api/submissions.py's can_view_submission)."""
 
     __tablename__ = "agent"
 
@@ -47,6 +53,10 @@ class Agent(db.Model):
     email = db.Column(db.Text, unique=True)  # OTP delivery address
     phone_verified_at = db.Column(db.DateTime(timezone=True))
     assigned_station_id = db.Column(UUID(as_uuid=True), db.ForeignKey("polling_station.id"))
+    #: The campaign manager who last set this agent's assignment via
+    #: PATCH /api/agents/:id/assignment. Null when an admin made the
+    #: assignment instead, or when the agent has never been assigned.
+    assigned_by = db.Column(UUID(as_uuid=True), db.ForeignKey("agent.id"))
     role = db.Column(db.Text, nullable=False, default="agent")
     created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
 
@@ -83,6 +93,7 @@ class Agent(db.Model):
             "awaiting_activation": self.awaiting_activation,
             "activated_at": self.activated_at.isoformat() if self.activated_at else None,
             "assigned_station_id": str(self.assigned_station_id) if self.assigned_station_id else None,
+            "assigned_by": str(self.assigned_by) if self.assigned_by else None,
             "position_ids": [str(p.id) for p in self.positions],
         }
 

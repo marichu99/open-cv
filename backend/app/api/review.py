@@ -40,6 +40,7 @@ def review_submission(submission_id):
             record: VoteRecord = by_candidate.get(str(correction.get("candidate_id")))
             if not record:
                 continue
+            old_value = record.effective_votes
             # Same bound as the agent-facing path in api/submissions.py — a
             # coordinator correcting a misread digit is the intended use, and
             # neither a negative nor a nine-digit figure is that.
@@ -47,14 +48,22 @@ def review_submission(submission_id):
                 correction.get("votes_corrected"), "Corrected vote count"
             )
             record.manually_overridden = True
-        db.session.add(
-            VerificationLog(
-                submission_id=submission.id,
-                reviewer_id=get_jwt_identity(),
-                action="manual_correct",
-                notes=notes,
+            # One row per corrected candidate with the actual old/new
+            # figures — matches the agent-facing path in api/submissions.py,
+            # so a coordinator overriding an agent's earlier correction still
+            # leaves both values visible in the log instead of only the
+            # latest one.
+            db.session.add(
+                VerificationLog(
+                    submission_id=submission.id,
+                    reviewer_id=get_jwt_identity(),
+                    action="manual_correct",
+                    notes=notes,
+                    candidate_id=record.candidate_id,
+                    old_value=old_value,
+                    new_value=record.votes_corrected,
+                )
             )
-        )
 
     if action:
         if action not in REVIEW_ACTIONS or action not in _ACTION_TO_STATUS:

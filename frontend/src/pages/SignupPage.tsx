@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { Camera, Users, ArrowLeft, ArrowRight, ClipboardCheck, User, Phone, Mail } from "lucide-react";
+import { Camera, Users, Flag, ArrowLeft, ArrowRight, ClipboardCheck, User, Phone, Mail } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { OtpInput } from "@/components/ui/otp-input";
 import { cn } from "@/lib/utils";
 
-type SignupRole = "agent" | "campaign_manager";
+type SignupRole = "agent" | "campaign_manager" | "aspirant";
 
 const FIELD_WRAP =
   "flex items-center gap-2 rounded-md border border-input bg-card px-3 focus-within:ring-2 focus-within:ring-ring";
@@ -23,6 +23,7 @@ const ROLE_HOME: Record<string, string> = {
   campaign_manager: "/campaign-manager",
   coordinator: "/admin",
   admin: "/admin",
+  aspirant: "/aspirant",
 };
 
 function RoleCard({
@@ -59,7 +60,8 @@ function RoleCard({
 
 export function SignupPage() {
   const [searchParams] = useSearchParams();
-  const initialRole = searchParams.get("role") === "campaign_manager" ? "campaign_manager" : null;
+  const roleParam = searchParams.get("role");
+  const initialRole = roleParam === "campaign_manager" || roleParam === "aspirant" ? roleParam : null;
 
   const [role, setRole] = useState<SignupRole | null>(initialRole);
   const [step, setStep] = useState<"details" | "verify">("details");
@@ -92,10 +94,13 @@ export function SignupPage() {
     if (!canSubmit || !role) return;
     setBusy(true);
     try {
-      const res =
+      const endpoint =
         role === "agent"
-          ? await api.post("/api/auth/agents/register", { full_name: fullName, phone_number: phone, email })
-          : await api.post("/api/auth/campaign_managers/register", { full_name: fullName, phone_number: phone, email });
+          ? "/api/auth/agents/register"
+          : role === "campaign_manager"
+          ? "/api/auth/campaign_managers/register"
+          : "/api/auth/aspirants/register";
+      const res = await api.post(endpoint, { full_name: fullName, phone_number: phone, email });
       toast.info(res.data.message ?? `Verification code sent to ${email}`);
       if (res.data.debug_otp) {
         toast.info(`Dev mode — OTP: ${res.data.debug_otp}`);
@@ -116,7 +121,7 @@ export function SignupPage() {
       const res = await api.post("/api/auth/agents/verify", { phone_number: phone, code });
       login(res.data.access_token, res.data.agent);
       toast.success("Account created — you're signed in.");
-      navigate(role === "agent" ? "/agent" : "/campaign-manager");
+      navigate(ROLE_HOME[role ?? ""] ?? "/dashboard");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Invalid code");
     } finally {
@@ -161,7 +166,7 @@ export function SignupPage() {
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             {!role && (
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <RoleCard
                   icon={Camera}
                   title="Field Agent"
@@ -173,6 +178,12 @@ export function SignupPage() {
                   title="Campaign Manager"
                   description="Assign agents to stations and elective positions."
                   onClick={() => setRole("campaign_manager")}
+                />
+                <RoleCard
+                  icon={Flag}
+                  title="Aspirant"
+                  description="See who's reported in and review every submitted form."
+                  onClick={() => setRole("aspirant")}
                 />
               </div>
             )}
@@ -242,6 +253,14 @@ export function SignupPage() {
                       An admin has to approve this account before you can manage agents — you'll be able to sign in
                       straight away, but management stays locked until then. Sign-in codes are also copied to a fixed
                       team inbox so new sign-ups are visible to the team.
+                    </p>
+                  )}
+
+                  {role === "aspirant" && (
+                    <p className="rounded-md bg-muted/60 p-2.5 text-xs text-muted-foreground">
+                      An admin has to approve this account before you can view results — you'll be able to sign in
+                      straight away, but the overview stays locked until then. Sign-in codes are also copied to a
+                      fixed team inbox so new sign-ups are visible to the team.
                     </p>
                   )}
 

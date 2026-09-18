@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { api } from "./api";
+import { api, API_URL, getToken } from "./api";
 import { getSocket } from "./socket";
 import type {
   County,
@@ -14,6 +14,7 @@ import type {
   VotesByGroup,
   GroupingLevel,
   FormSubmission,
+  AgentWithAssignment,
 } from "@/types";
 
 // Lazy, cascading geography fetches — at national scale (47 counties, 290
@@ -138,9 +139,74 @@ export function useVotesByGroup(
 /** The coordinator/admin review queue — refetches on `tally_updated`
  * (emitted both when a new submission is finalized and when another
  * reviewer resolves one), so a newly-flagged submission or someone else's
- * review action shows up without a manual reload. */
+ * review action shows up without a manual reload. Backend-scoped per caller
+ * role (see api/submissions.py's list_submissions) — a campaign manager only
+ * ever gets back submissions from their own agents, an aspirant gets
+ * everything, no client-side filtering needed either way. */
 export function useSubmissionsFeed(params: Record<string, string>) {
   const query = new URLSearchParams(params).toString();
   const path = `/api/submissions${query ? `?${query}` : ""}`;
   return useLiveResource<FormSubmission[]>(path, []);
+}
+
+/** A single submission's full detail (vote records + audit log), for the
+ * read-only SubmissionAuditPanel — kept separate from ReviewDialog's own
+ * inline fetch only because ReviewDialog also needs local editable
+ * `corrections` state seeded from the same response. */
+export function useSubmission(submissionId: string | null) {
+  return useLiveResource<FormSubmission | null>(
+    submissionId ? `/api/submissions/${submissionId}` : null,
+    null,
+  );
+}
+
+/** The submitted form photo, fetched as an authenticated blob (the image
+ * endpoint requires a bearer token, so it can't be used directly as an
+ * <img src>) — same pattern as ReviewDialog's inline fetch. */
+export function useSubmissionImage(submissionId: string | null) {
+  const [imageSrc, setImageSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!submissionId) {
+      setImageSrc(null);
+      return;
+    }
+    let cancelled = false;
+    fetch(`${API_URL}/api/submissions/${submissionId}/image`, {
+      headers: { Authorization: `Bearer ${getToken()}` },
+    })
+      .then((r) => r.blob())
+      .then((blob) => !cancelled && setImageSrc(URL.createObjectURL(blob)))
+      .catch(() => !cancelled && setImageSrc(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [submissionId]);
+
+  return imageSrc;
+}
+
+/** Field agents with their latest-submission status attached, so an
+ * aspirant/campaign manager can see at a glance who's uploaded and who
+ * hasn't (backend's ?with_coverage=true — see api/agents.py). */
+export function useAgentsWithCoverage() {
+  const [agents, setAgents] = useState<AgentWithAssignment[]>([]);
+
+  const refresh = useCallback(() => {
+    api
+      .get<AgentWithAssignment[]>("/api/agents", { params: { with_coverage: "true" } })
+      .then((res) => setAgents(res.data))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const socket = getSocket();
+    socket.on("tally_updated", refresh);
+    return () => {
+      socket.off("tally_updated", refresh);
+    };
+  }, [refresh]);
+
+  return { agents, refresh };
 }

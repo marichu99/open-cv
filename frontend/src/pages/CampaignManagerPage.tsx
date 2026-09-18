@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import { useCounties, useConstituencies, useWards, useStations } from "@/lib/hooks";
+import { useCounties, useConstituencies, useWards, useStations, useSubmissionsFeed } from "@/lib/hooks";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { SubmissionsTable } from "@/components/dashboard/SubmissionsTable";
+import { SubmissionAuditPanel } from "@/components/dashboard/SubmissionAuditPanel";
 import { positionLabel, cn } from "@/lib/utils";
 import type { AgentWithAssignment, Candidate, ElectivePosition, PositionLevel } from "@/types";
 
@@ -434,12 +436,18 @@ function CandidatesCard() {
 export function CampaignManagerPage() {
   const [agents, setAgents] = useState<AgentWithAssignment[]>([]);
   const [activeAgent, setActiveAgent] = useState<AgentWithAssignment | null>(null);
+  const [activeSubmissionId, setActiveSubmissionId] = useState<string | null>(null);
 
   const load = useCallback(() => {
     api.get<AgentWithAssignment[]>("/api/agents").then((res) => setAgents(res.data));
   }, []);
 
   useEffect(() => load(), [load]);
+
+  // Backend-scoped to submissions from agents this campaign manager
+  // assigned (see api/submissions.py's list_submissions/can_view_submission)
+  // — no client-side filtering needed.
+  const { data: submissions } = useSubmissionsFeed({});
 
   return (
     <div className="flex flex-col gap-6">
@@ -515,6 +523,20 @@ export function CampaignManagerPage() {
       </Card>
 
       <AssignmentDialog agent={activeAgent} onClose={() => setActiveAgent(null)} onSaved={load} />
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Submissions</CardTitle>
+          <CardDescription>
+            Forms uploaded by your agents, with each one's photo and full correction history — {submissions.length} shown
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <SubmissionsTable submissions={submissions} onSelect={setActiveSubmissionId} />
+        </CardContent>
+      </Card>
+
+      <SubmissionAuditPanel submissionId={activeSubmissionId} onClose={() => setActiveSubmissionId(null)} />
 
       <CandidatesCard />
     </div>

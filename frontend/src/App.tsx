@@ -9,6 +9,7 @@ import { LoginPage } from "@/pages/LoginPage";
 import { SignupPage } from "@/pages/SignupPage";
 import { AdminPage } from "@/pages/AdminPage";
 import { CampaignManagerPage } from "@/pages/CampaignManagerPage";
+import { AspirantPage } from "@/pages/AspirantPage";
 
 export default function App() {
   return (
@@ -40,6 +41,14 @@ export default function App() {
               element={
                 <ProtectedRoute roles={["coordinator", "admin"]}>
                   <AdminPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/aspirant"
+              element={
+                <ProtectedRoute roles={["aspirant", "admin"]}>
+                  <AspirantPage />
                 </ProtectedRoute>
               }
             />

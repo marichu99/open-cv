@@ -1,4 +1,4 @@
-export type Role = "agent" | "campaign_manager" | "coordinator" | "admin" | "viewer";
+export type Role = "agent" | "campaign_manager" | "coordinator" | "admin" | "viewer" | "aspirant";
 
 /** What a session may actually *do*. A privileged account that no admin has
  *  activated yet carries "pending", which matches no server-side
@@ -19,6 +19,9 @@ export interface Agent {
   awaiting_activation: boolean;
   activated_at: string | null;
   assigned_station_id: string | null;
+  /** The campaign manager who last set assigned_station_id/position_ids —
+   *  null if an admin made the assignment, or if never assigned. */
+  assigned_by: string | null;
   position_ids: string[];
 }
 
@@ -28,6 +31,10 @@ export interface AgentWithAssignment extends Agent {
   constituency_name: string | null;
   county_name: string | null;
   position_names: string[];
+  /** Present only when fetched with ?with_coverage=true. */
+  latest_submission_status?: SubmissionStatus | null;
+  latest_submission_at?: string | null;
+  has_tallied_submission?: boolean;
 }
 
 export interface County {
@@ -112,6 +119,12 @@ export interface VerificationLogEntry {
   reviewer_name: string | null;
   action: string;
   notes: string | null;
+  /** Set only on action="manual_correct" rows — which candidate's figure
+   *  changed, and its effective value immediately before/after this row. */
+  candidate_id: string | null;
+  candidate_name: string | null;
+  old_value: number | null;
+  new_value: number | null;
   created_at: string;
 }
 

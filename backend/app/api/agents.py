@@ -1,18 +1,19 @@
 from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
-from flask_jwt_extended import get_jwt
+from flask_jwt_extended import get_jwt, get_jwt_identity
 
 from app.extensions import db
-from app.models import Agent, ElectivePosition, PollingStation, Ward, Constituency, County
+from app.models import Agent, ElectivePosition, PollingStation, Ward, Constituency, County, FormSubmission
 from app.models.agent import PRIVILEGED_ROLES
+from app.models.submission import TALLIED_STATUSES
 from app.utils.errors import ApiError
 from app.utils.rbac import role_required
 
 bp = Blueprint("agents", __name__, url_prefix="/api/agents")
 
 
-def _serialize(agent: Agent):
+def _serialize(agent: Agent, with_coverage: bool = False):
     data = agent.to_dict()
     data["assigned_station_name"] = None
     data["ward_name"] = None
@@ -29,11 +30,20 @@ def _serialize(agent: Agent):
             data["constituency_name"] = constituency.name if constituency else None
             data["county_name"] = county.name if county else None
     data["position_names"] = [p.name for p in agent.positions]
+    if with_coverage:
+        latest = (
+            FormSubmission.query.filter_by(agent_id=agent.id)
+            .order_by(FormSubmission.uploaded_at.desc())
+            .first()
+        )
+        data["latest_submission_status"] = latest.status if latest else None
+        data["latest_submission_at"] = latest.uploaded_at.isoformat() if latest and latest.uploaded_at else None
+        data["has_tallied_submission"] = latest.status in TALLIED_STATUSES if latest else False
     return data
 
 
 @bp.get("")
-@role_required("campaign_manager", "admin")
+@role_required("campaign_manager", "admin", "aspirant")
 def list_agents():
     """Field agents by default — campaign managers assign stations/positions
     to agents, not to other coordinators/admins/viewers.
@@ -44,15 +54,23 @@ def list_agents():
     and admins would hand them the phone numbers and emails of exactly the
     accounts worth targeting (every role signs in with a code to the address
     on file — see api/auth.py).
+
+    `?with_coverage=true` adds each field agent's latest submission
+    status/timestamp, so an aspirant or campaign manager can see who has
+    uploaded a form and who hasn't — no separate endpoint for that.
     """
     role = request.args.get("role", "agent")
-    if role != "agent" and get_jwt().get("role") != "admin":
+    caller_role = get_jwt().get("role")
+    if role != "agent" and caller_role != "admin":
         raise ApiError("Only an admin can list accounts other than field agents", status_code=403)
+    if caller_role == "aspirant" and role != "agent":
+        raise ApiError("Aspirants can only list field agents", status_code=403)
 
     q = Agent.query.filter_by(role=role)
     if request.args.get("awaiting_activation") == "true":
         q = q.filter(Agent.activated_at.is_(None))
-    return jsonify([_serialize(a) for a in q.order_by(Agent.full_name).all()])
+    with_coverage = request.args.get("with_coverage") == "true"
+    return jsonify([_serialize(a, with_coverage=with_coverage) for a in q.order_by(Agent.full_name).all()])
 
 
 @bp.patch("/<uuid:agent_id>/activation")
@@ -115,6 +133,15 @@ def assign_station(agent_id):
         if len(positions) != len(set(position_ids)):
             raise ApiError("Unknown elective position")
         agent.positions = positions
+
+    # Records which campaign manager owns this assignment — this is what
+    # scopes their later read access to the agent's submissions/images/logs
+    # (see app/api/submissions.py's can_view_submission). An admin making
+    # the assignment isn't "a managing CM" for that purpose, so leave
+    # assigned_by untouched in that case rather than overwrite it with the
+    # admin's own id.
+    if get_jwt().get("role") == "campaign_manager":
+        agent.assigned_by = get_jwt_identity()
 
     db.session.commit()
     return jsonify(_serialize(agent))

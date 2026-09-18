@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { VerificationLogList } from "@/components/dashboard/VerificationLogList";
 import type { FormSubmission } from "@/types";
 
 export function ReviewDialog({
@@ -125,6 +126,10 @@ export function ReviewDialog({
                 </div>
               </div>
             </div>
+
+            <Separator className="my-4" />
+            <h3 className="mb-2 text-sm font-semibold">Audit log</h3>
+            <VerificationLogList logs={submission.logs ?? []} />
 
             <div className="mt-4 flex flex-col gap-1.5">
               <Label htmlFor="notes">Reviewer notes</Label>
