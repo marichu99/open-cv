@@ -7,6 +7,7 @@ from app.extensions import db
 from app.models import Agent, ElectivePosition, PollingStation, Ward, Constituency, County, FormSubmission
 from app.models.agent import PRIVILEGED_ROLES
 from app.models.submission import TALLIED_STATUSES
+from app.services.candidates import inherited_assignment
 from app.utils.errors import ApiError
 from app.utils.rbac import role_required
 
@@ -30,6 +31,13 @@ def _serialize(agent: Agent, with_coverage: bool = False):
             data["constituency_name"] = constituency.name if constituency else None
             data["county_name"] = county.name if county else None
     data["position_names"] = [p.name for p in agent.positions]
+    # Field-agent only: what their campaign-manager -> aspirant chain
+    # already implies about their race/geography, before this campaign
+    # manager has assigned anything explicitly — see
+    # services/candidates.py's inherited_assignment. Lets the assignment
+    # dialog default (and the backend below enforce) to the aspirant's own
+    # race instead of a blank slate across all 47 counties.
+    data["inherited_assignment"] = inherited_assignment(agent) if agent.role == "agent" else None
     if with_coverage:
         latest = (
             FormSubmission.query.filter_by(agent_id=agent.id)
@@ -58,15 +66,31 @@ def list_agents():
     `?with_coverage=true` adds each field agent's latest submission
     status/timestamp, so an aspirant or campaign manager can see who has
     uploaded a form and who hasn't — no separate endpoint for that.
+
+    Field-agent results (the default `role=agent`) are scoped by who's
+    calling — a campaign manager sees only agents who picked them at signup
+    (Agent.assigned_by, see api/auth.py's register_agent); an aspirant sees
+    only agents whose campaign manager picked THAT aspirant in turn
+    (Agent.assigned_by -> Agent.aspirant_id), a two-hop cascade down the
+    same hierarchy campaign-manager signup declares. Admin stays unscoped —
+    the one role with cross-cutting oversight. Listing another role
+    (`?role=campaign_manager` etc, admin-only per the check above) is never
+    scoped this way; only the field-agent roster is.
     """
     role = request.args.get("role", "agent")
     caller_role = get_jwt().get("role")
+    caller_identity = get_jwt_identity()
     if role != "agent" and caller_role != "admin":
         raise ApiError("Only an admin can list accounts other than field agents", status_code=403)
     if caller_role == "aspirant" and role != "agent":
         raise ApiError("Aspirants can only list field agents", status_code=403)
 
     q = Agent.query.filter_by(role=role)
+    if role == "agent" and caller_role == "campaign_manager":
+        q = q.filter(Agent.assigned_by == caller_identity)
+    elif role == "agent" and caller_role == "aspirant":
+        their_cms = db.session.query(Agent.id).filter(Agent.role == "campaign_manager", Agent.aspirant_id == caller_identity)
+        q = q.filter(Agent.assigned_by.in_(their_cms))
     if request.args.get("awaiting_activation") == "true":
         q = q.filter(Agent.activated_at.is_(None))
     with_coverage = request.args.get("with_coverage") == "true"
@@ -111,20 +135,74 @@ def set_activation(agent_id):
 @role_required("campaign_manager", "admin")
 def assign_station(agent_id):
     """The only place an agent's station/position assignment can be set —
-    not self-service at signup (see api/auth.py's register_agent). An agent
-    posted at one station commonly tracks several simultaneous races there,
-    so `position_ids` replaces the agent's whole assigned set on each call —
-    it's not an incremental add/remove."""
+    not self-service at signup (see api/auth.py's register_agent, which
+    only auto-declares the race, never a station). An agent posted at one
+    station commonly tracks several simultaneous races there, so
+    `position_ids` replaces the agent's whole assigned set on each call —
+    it's not an incremental add/remove.
+
+    `assigned_station_id` is cross-checked against whatever geography this
+    agent's campaign-manager -> aspirant chain already implies (see
+    services/candidates.py's inherited_assignment) — a station outside that
+    scope is rejected with 400 rather than silently accepted."""
     agent = db.session.get(Agent, agent_id)
     if not agent or agent.role != "agent":
         raise ApiError("Not found", status_code=404)
+    # An agent now picks their campaign manager at signup (see
+    # api/auth.py's register_agent), so assigned_by is set from day one —
+    # a different campaign manager calling this is exactly the cross-CM
+    # visibility this whole hierarchy exists to prevent, not just a listing
+    # gap. Legacy agents that predate this feature (assigned_by still null)
+    # can still be claimed by whichever CM assigns them first.
+    if get_jwt().get("role") == "campaign_manager" and agent.assigned_by and str(agent.assigned_by) != get_jwt_identity():
+        raise ApiError("This agent is linked to a different campaign manager", status_code=403)
 
     data = request.get_json(force=True) or {}
 
     if "assigned_station_id" in data:
         station_id = data.get("assigned_station_id") or None
-        if station_id and not db.session.get(PollingStation, station_id):
+        station = db.session.get(PollingStation, station_id) if station_id else None
+        if station_id and not station:
             raise ApiError("Unknown polling station")
+
+        # Cross-check the station actually falls within the geography this
+        # agent's campaign-manager -> aspirant chain already implies (see
+        # services/candidates.py's inherited_assignment) — the same
+        # "trust nothing declared, verify against what's actually linked"
+        # posture the extraction pipeline uses for a submission's own
+        # declared station (services/location_check.py). Without this, a
+        # campaign manager could assign an agent tracking a Wajir Senate
+        # race to a Mombasa polling station with nothing catching it before
+        # the vote lands in the wrong scope entirely. Only one of
+        # county/constituency/ward is ever non-null on a given inherited
+        # scope (it matches the aspirant's own position level), so at most
+        # one of these three checks actually fires.
+        if station:
+            inherited = inherited_assignment(agent)
+            if inherited:
+                ward = db.session.get(Ward, station.ward_id)
+                constituency = db.session.get(Constituency, ward.constituency_id) if ward else None
+                county_id = constituency.county_id if constituency else None
+
+                if inherited["ward"] and inherited["ward"]["id"] != str(station.ward_id):
+                    raise ApiError(
+                        f"This station isn't in {inherited['ward']['name']} ward — that's where this "
+                        f"agent's race ({inherited['aspirant_name']}'s campaign) is actually running.",
+                        status_code=400,
+                    )
+                if inherited["constituency"] and (not constituency or inherited["constituency"]["id"] != str(constituency.id)):
+                    raise ApiError(
+                        f"This station isn't in {inherited['constituency']['name']} constituency — that's where "
+                        f"this agent's race ({inherited['aspirant_name']}'s campaign) is actually running.",
+                        status_code=400,
+                    )
+                if inherited["county"] and (not county_id or inherited["county"]["id"] != str(county_id)):
+                    raise ApiError(
+                        f"This station isn't in {inherited['county']['name']} county — that's where this "
+                        f"agent's race ({inherited['aspirant_name']}'s campaign) is actually running.",
+                        status_code=400,
+                    )
+
         agent.assigned_station_id = station_id
 
     if "position_ids" in data:

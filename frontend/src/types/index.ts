@@ -23,6 +23,30 @@ export interface Agent {
    *  null if an admin made the assignment, or if never assigned. */
   assigned_by: string | null;
   position_ids: string[];
+  /** Aspirant-only: the race they declared at signup, linked to their own
+   *  Candidate roster entry. Null for every other role. */
+  candidate: Candidate | null;
+  /** Campaign-manager-only: the aspirant they registered under. Null for
+   *  every other role. */
+  aspirant_id: string | null;
+  aspirant_name: string | null;
+  /** Field-agent only, and only on responses that resolve it (GET /api/auth/me,
+   *  GET /api/agents) — undefined elsewhere. See InheritedAssignment below. */
+  inherited_assignment?: InheritedAssignment | null;
+}
+
+/** What a field agent's campaign-manager -> aspirant chain already implies
+ *  about their race/geography, before a campaign manager has assigned
+ *  anything explicitly — derived server-side (see backend
+ *  services/candidates.py's inherited_assignment), never stored. `county`/
+ *  `constituency`/`ward` are each null unless the aspirant's own position
+ *  level implies that level (a national race implies no geography at all). */
+export interface InheritedAssignment {
+  aspirant_name: string;
+  position: ElectivePosition | null;
+  county: County | null;
+  constituency: Constituency | null;
+  ward: Ward | null;
 }
 
 export interface AgentWithAssignment extends Agent {
@@ -31,6 +55,8 @@ export interface AgentWithAssignment extends Agent {
   constituency_name: string | null;
   county_name: string | null;
   position_names: string[];
+  /** Field-agent only — null for every other role. */
+  inherited_assignment: InheritedAssignment | null;
   /** Present only when fetched with ?with_coverage=true. */
   latest_submission_status?: SubmissionStatus | null;
   latest_submission_at?: string | null;
@@ -148,6 +174,41 @@ export interface FormSubmission {
   warnings: string[];
   vote_records?: VoteRecord[];
   logs?: VerificationLogEntry[];
+}
+
+/** One concrete occurrence within a DiscrepancyGroup — see
+ *  GET /api/submissions/discrepancy-report. `narration` is a ready-to-show
+ *  plain-English sentence built server-side; the rest are just enough to
+ *  jump to the source submission (SubmissionAuditPanel) from it. */
+export interface DiscrepancyInstance {
+  submission_id: string;
+  station_name: string | null;
+  form_type: string;
+  agent_name: string | null;
+  occurred_at: string | null;
+  narration: string;
+}
+
+export type DiscrepancyType =
+  | "agent_correction"
+  | "extraction_failed"
+  | "arithmetic_mismatch"
+  | "low_confidence"
+  | "illegible"
+  | "duplicate_superseded"
+  | "duplicate_reversed";
+
+export interface DiscrepancyGroup {
+  type: DiscrepancyType;
+  label: string;
+  count: number;
+  instances: DiscrepancyInstance[];
+}
+
+export interface DiscrepancyReport {
+  generated_at: string;
+  total_submissions_in_scope: number;
+  groups: DiscrepancyGroup[];
 }
 
 export interface TallyCandidate {

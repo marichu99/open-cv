@@ -22,18 +22,44 @@ bp = Blueprint("submissions", __name__, url_prefix="/api/submissions")
 
 
 def can_view_submission(submission: FormSubmission, identity: str, role: str) -> bool:
-    """Who may read a submission's detail/image/logs. `aspirant` is unscoped
-    (the candidate's own account, sees everything); `campaign_manager` is
+    """Who may read a submission's detail/image/logs. `campaign_manager` is
     scoped to submissions from agents *they* assigned (Agent.assigned_by —
-    see api/agents.py's assign_station); `agent` only ever sees their own
-    upload, same as before this function existed."""
-    if role in ("coordinator", "admin", "aspirant"):
+    see api/agents.py's assign_station); `aspirant` is the same cascade one
+    hop further — agents whose campaign manager registered under THAT
+    aspirant (Agent.assigned_by -> Agent.aspirant_id), mirroring
+    api/agents.py's list_agents scoping so an aspirant can't see another
+    aspirant's campaign any more than they can see their agents; `agent`
+    only ever sees their own upload, same as before this function existed."""
+    if role in ("coordinator", "admin"):
         return True
     if role == "campaign_manager":
         return submission.agent is not None and str(submission.agent.assigned_by) == str(identity)
+    if role == "aspirant":
+        return (
+            submission.agent is not None
+            and submission.agent.assigned_by is not None
+            and Agent.query.filter_by(id=submission.agent.assigned_by, role="campaign_manager", aspirant_id=identity).first()
+            is not None
+        )
     if role == "agent":
         return str(submission.agent_id) == str(identity)
     return False
+
+
+def _scope_submissions(role: str, identity: str):
+    """The campaign-manager/aspirant scoping both list_submissions and
+    discrepancy_report need — a campaign manager only ever sees submissions
+    from agents *they* assigned; an aspirant, the same cascade one hop
+    further. Mirrors can_view_submission's per-row check above, just as a
+    query filter instead of a per-object one. coordinator/admin get
+    everything (no filter applied)."""
+    q = FormSubmission.query
+    if role == "campaign_manager":
+        q = q.join(Agent, FormSubmission.agent_id == Agent.id).filter(Agent.assigned_by == identity)
+    elif role == "aspirant":
+        their_cms = db.session.query(Agent.id).filter(Agent.role == "campaign_manager", Agent.aspirant_id == identity)
+        q = q.join(Agent, FormSubmission.agent_id == Agent.id).filter(Agent.assigned_by.in_(their_cms))
+    return q
 
 
 def _arithmetic_ok(submission: FormSubmission) -> bool:
@@ -254,11 +280,7 @@ def list_submissions():
     if role not in ("coordinator", "admin", "aspirant", "campaign_manager"):
         raise ApiError("Forbidden", status_code=403)
 
-    q = FormSubmission.query
-    if role == "campaign_manager":
-        # Scoped to submissions from agents *this* campaign manager assigned
-        # — see can_view_submission's docstring for why.
-        q = q.join(Agent, FormSubmission.agent_id == Agent.id).filter(Agent.assigned_by == get_jwt_identity())
+    q = _scope_submissions(role, get_jwt_identity())
     status = request.args.get("status")
     station_id = request.args.get("station_id")
     has_warnings = request.args.get("has_warnings")
@@ -273,6 +295,159 @@ def list_submissions():
         q = q.filter(db.func.json_array_length(FormSubmission.warnings) > 0)
     q = q.order_by(FormSubmission.uploaded_at.desc()).limit(200)
     return jsonify([s.to_dict(include_votes=False) for s in q])
+
+
+#: (group key, label, warning substring) — arithmetic/confidence/legibility
+#: discrepancies all live as plain-text entries in FormSubmission.warnings
+#: (see api/submissions.py's finalize and services/claude_vision.py), so
+#: they're matched by substring rather than a dedicated column. Matching
+#: text, not re-deriving the check — this report explains what already
+#: happened, it doesn't re-run the checks that produced it.
+_WARNING_GROUPS = (
+    ("arithmetic_mismatch", "Arithmetic mismatches", "don't add up"),
+    ("low_confidence", "Low-confidence extractions", "confidence below"),
+    ("illegible", "Flagged as hard to read", "difficult to read"),
+)
+
+
+def _discrepancy_label(submission: FormSubmission) -> str:
+    station = submission.station.name if submission.station else "an unknown station"
+    return f"{station} (Form {submission.form_type})"
+
+
+def _discrepancy_when(dt) -> str:
+    return dt.strftime("%d %b %Y, %H:%M") if dt else "an unknown time"
+
+
+@bp.get("/discrepancy-report")
+@jwt_required()
+def discrepancy_report():
+    """Every instance of a field agent correcting a figure, a submission
+    being superseded (or restored) as a duplicate, or the extraction
+    pipeline itself flagging something — an arithmetic mismatch, low
+    confidence, illegible handwriting, or a wrong race/station caught
+    before it ever reached the tally — grouped by kind, each with a plain-
+    English sentence of what actually happened rather than just the raw
+    fields. Nothing here is a new audit mechanism: it's built entirely from
+    FormSubmission.warnings and VerificationLog, which every discrepancy
+    already writes to as it happens (see finalize, services/dedup.py,
+    api/review.py) — this endpoint is a read, not a new source of truth.
+
+    Scoped exactly like list_submissions: a campaign manager sees only
+    their own agents' submissions, an aspirant the same cascade one hop
+    further (see can_view_submission's docstring) — so a campaign manager
+    pulling this report only ever sees discrepancies their own agents were
+    actually involved in, never another campaign's."""
+    role = get_jwt().get("role")
+    if role not in ("coordinator", "admin", "aspirant", "campaign_manager"):
+        raise ApiError("Forbidden", status_code=403)
+
+    submissions = _scope_submissions(role, get_jwt_identity()).all()
+    by_id = {s.id: s for s in submissions}
+
+    groups: dict[str, list[dict]] = {
+        "agent_correction": [],
+        "duplicate_superseded": [],
+        "duplicate_reversed": [],
+        "arithmetic_mismatch": [],
+        "low_confidence": [],
+        "illegible": [],
+        "extraction_failed": [],
+    }
+
+    def _instance(s: FormSubmission, occurred_at, narration: str) -> dict:
+        return {
+            "submission_id": str(s.id),
+            "station_name": s.station.name if s.station else None,
+            "form_type": s.form_type,
+            "agent_name": s.agent.full_name if s.agent else None,
+            "occurred_at": occurred_at.isoformat() if occurred_at else None,
+            "narration": narration,
+        }
+
+    logs = (
+        VerificationLog.query.filter(
+            VerificationLog.submission_id.in_(by_id.keys()),
+            VerificationLog.action.in_(("manual_correct", "mark_duplicate", "approve")),
+        )
+        .order_by(VerificationLog.created_at.desc())
+        .all()
+        if by_id
+        else []
+    )
+    for log in logs:
+        submission = by_id.get(log.submission_id)
+        if not submission:
+            continue
+
+        if log.action == "manual_correct":
+            candidate_name = log.candidate.full_name if log.candidate else "a candidate"
+            old = log.old_value if log.old_value is not None else "an unread figure"
+            groups["agent_correction"].append(_instance(
+                submission, log.created_at,
+                f"{submission.agent.full_name if submission.agent else 'The agent'} corrected {candidate_name}'s "
+                f"vote count from {old} to {log.new_value} at {_discrepancy_label(submission)}, before "
+                f"finalizing, {_discrepancy_when(log.created_at)}.",
+            ))
+        elif log.action == "mark_duplicate":
+            by_whom = f" by {log.reviewer.full_name}" if log.reviewer else ""
+            note = f" — {log.notes}" if log.notes else ""
+            groups["duplicate_superseded"].append(_instance(
+                submission, log.created_at,
+                f"{_discrepancy_label(submission)}, uploaded by "
+                f"{submission.agent.full_name if submission.agent else 'an agent'}, was marked a duplicate"
+                f"{by_whom} on {_discrepancy_when(log.created_at)}{note}.",
+            ))
+        else:  # "approve" — only ever logged here to reverse an earlier mark_duplicate (see review.py)
+            groups["duplicate_reversed"].append(_instance(
+                submission, log.created_at,
+                f"{_discrepancy_label(submission)}'s earlier duplicate flag was reversed on manual review by "
+                f"{log.reviewer.full_name if log.reviewer else 'a coordinator'} on {_discrepancy_when(log.created_at)} "
+                "— it was restored to count toward the tally after all.",
+            ))
+
+    for s in submissions:
+        warnings = s.warnings or []
+        for key, _label, phrase in _WARNING_GROUPS:
+            match = next((w for w in warnings if phrase in w), None)
+            if match:
+                groups[key].append(_instance(
+                    s, s.finalized_at or s.uploaded_at,
+                    f"{_discrepancy_label(s)}, uploaded by {s.agent.full_name if s.agent else 'an agent'}: {match}",
+                ))
+        if s.status == "extraction_failed":
+            reason = warnings[0] if warnings else "the extraction pipeline could not process this photo"
+            groups["extraction_failed"].append(_instance(
+                s, s.uploaded_at,
+                f"{_discrepancy_label(s)}, uploaded by {s.agent.full_name if s.agent else 'an agent'}, "
+                f"never reached the tally: {reason}",
+            ))
+
+    group_labels = {
+        "agent_correction": "Agent-corrected figures",
+        "duplicate_superseded": "Duplicate submissions superseded",
+        "duplicate_reversed": "Duplicate flags reversed on review",
+        **{key: label for key, label, _phrase in _WARNING_GROUPS},
+        "extraction_failed": "Extraction failed before reaching the tally",
+    }
+    ordered = (
+        "agent_correction", "extraction_failed", "arithmetic_mismatch", "low_confidence",
+        "illegible", "duplicate_superseded", "duplicate_reversed",
+    )
+    return jsonify({
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "total_submissions_in_scope": len(submissions),
+        "groups": [
+            {
+                "type": key,
+                "label": group_labels[key],
+                "count": len(groups[key]),
+                "instances": sorted(groups[key], key=lambda i: i["occurred_at"] or "", reverse=True),
+            }
+            for key in ordered
+            if groups[key]
+        ],
+    })
 
 
 @bp.get("/<uuid:submission_id>")

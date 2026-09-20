@@ -15,6 +15,7 @@ import type {
   GroupingLevel,
   FormSubmission,
   AgentWithAssignment,
+  DiscrepancyReport,
 } from "@/types";
 
 // Lazy, cascading geography fetches — at national scale (47 counties, 290
@@ -149,6 +150,19 @@ export function useSubmissionsFeed(params: Record<string, string>) {
   return useLiveResource<FormSubmission[]>(path, []);
 }
 
+/** Every agent correction, superseded/reversed duplicate, and extraction-
+ * time flag (arithmetic, confidence, legibility, wrong race/station),
+ * grouped and narrated server-side — see GET /api/submissions/discrepancy-
+ * report. `enabled` gates the fetch so opening the report is what triggers
+ * it, not just having the page mounted (same reasoning as useSubmission
+ * gating on submissionId being non-null). */
+export function useDiscrepancyReport(enabled: boolean) {
+  return useLiveResource<DiscrepancyReport | null>(
+    enabled ? "/api/submissions/discrepancy-report" : null,
+    null,
+  );
+}
+
 /** A single submission's full detail (vote records + audit log), for the
  * read-only SubmissionAuditPanel — kept separate from ReviewDialog's own
  * inline fetch only because ReviewDialog also needs local editable
@@ -162,13 +176,17 @@ export function useSubmission(submissionId: string | null) {
 
 /** The submitted form photo, fetched as an authenticated blob (the image
  * endpoint requires a bearer token, so it can't be used directly as an
- * <img src>) — same pattern as ReviewDialog's inline fetch. */
+ * <img src>) — same pattern as ReviewDialog's inline fetch. `contentType`
+ * comes along so a caller offering a download link can pick a real file
+ * extension instead of guessing one. */
 export function useSubmissionImage(submissionId: string | null) {
   const [imageSrc, setImageSrc] = useState<string | null>(null);
+  const [contentType, setContentType] = useState<string | null>(null);
 
   useEffect(() => {
     if (!submissionId) {
       setImageSrc(null);
+      setContentType(null);
       return;
     }
     let cancelled = false;
@@ -176,14 +194,22 @@ export function useSubmissionImage(submissionId: string | null) {
       headers: { Authorization: `Bearer ${getToken()}` },
     })
       .then((r) => r.blob())
-      .then((blob) => !cancelled && setImageSrc(URL.createObjectURL(blob)))
-      .catch(() => !cancelled && setImageSrc(null));
+      .then((blob) => {
+        if (cancelled) return;
+        setImageSrc(URL.createObjectURL(blob));
+        setContentType(blob.type || null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setImageSrc(null);
+        setContentType(null);
+      });
     return () => {
       cancelled = true;
     };
   }, [submissionId]);
 
-  return imageSrc;
+  return { imageSrc, contentType };
 }
 
 /** Field agents with their latest-submission status attached, so an

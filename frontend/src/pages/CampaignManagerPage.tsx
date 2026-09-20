@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
+import { ClipboardList } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import { useCounties, useConstituencies, useWards, useStations, useSubmissionsFeed } from "@/lib/hooks";
+import { useAuth } from "@/lib/auth-context";
+import { useCounties, useConstituencies, useWards, useStations, useSubmissionsFeed, useDiscrepancyReport } from "@/lib/hooks";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { SubmissionsTable } from "@/components/dashboard/SubmissionsTable";
 import { SubmissionAuditPanel } from "@/components/dashboard/SubmissionAuditPanel";
+import { DiscrepancyReportDialog } from "@/components/dashboard/DiscrepancyReportDialog";
 import { positionLabel, cn } from "@/lib/utils";
 import type { AgentWithAssignment, Candidate, ElectivePosition, PositionLevel } from "@/types";
 
@@ -46,20 +49,33 @@ function AssignmentDialog({
 
   useEffect(() => {
     if (!agent) return;
-    setPositionIds(agent.position_ids);
     setStationId(agent.assigned_station_id ?? null);
     if (agent.assigned_station_id) {
+      // A station is already set — resolve its own chain, same as before.
+      // (Also covers position_ids: leave the campaign manager's earlier
+      // choice exactly as it was rather than re-deriving it.)
+      setPositionIds(agent.position_ids);
       api.get(`/api/geography/stations/${agent.assigned_station_id}/ancestors`).then((res) => {
         const { ward, constituency, county } = res.data;
         if (county) setCountyId(county.id);
         if (constituency) setConstituencyId(constituency.id);
         if (ward) setWardId(ward.id);
       });
-    } else {
-      setCountyId(null);
-      setConstituencyId(null);
-      setWardId(null);
+      return;
     }
+
+    // No station yet — start from what this agent's campaign-manager ->
+    // aspirant chain already implies (see backend services/candidates.py's
+    // inherited_assignment) instead of a blank slate across all 47
+    // counties. The campaign manager still has to pick ward + station
+    // themselves; this just saves re-deriving the obvious county/race, and
+    // the backend rejects a station outside it regardless of what's shown
+    // here (see assign_station's cross-check).
+    const inherited = agent.inherited_assignment;
+    setPositionIds(agent.position_ids.length > 0 || !inherited?.position ? agent.position_ids : [inherited.position.id]);
+    setCountyId(inherited?.county?.id ?? null);
+    setConstituencyId(inherited?.constituency?.id ?? null);
+    setWardId(inherited?.ward?.id ?? null);
   }, [agent]);
 
   async function save() {
@@ -90,6 +106,23 @@ function AssignmentDialog({
             agent at a station commonly covers more than one race at once.
           </DialogDescription>
         </DialogHeader>
+
+        {agent?.inherited_assignment && !agent.assigned_station_id && (
+          <p className="rounded-md bg-muted/60 p-2.5 text-xs text-muted-foreground">
+            Pre-filled from <span className="font-medium text-foreground">{agent.inherited_assignment.aspirant_name}</span>'s{" "}
+            {agent.inherited_assignment.position ? positionLabel(agent.inherited_assignment.position.name) : "race"}
+            {agent.inherited_assignment.county || agent.inherited_assignment.constituency || agent.inherited_assignment.ward
+              ? " in " +
+                [
+                  agent.inherited_assignment.ward?.name,
+                  agent.inherited_assignment.constituency?.name,
+                  agent.inherited_assignment.county?.name,
+                ]
+                  .filter(Boolean)[0]
+              : ""}
+            . Just narrow it down to the ward and polling station below.
+          </p>
+        )}
 
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
@@ -434,9 +467,17 @@ function CandidatesCard() {
 }
 
 export function CampaignManagerPage() {
+  const { agent: me } = useAuth();
   const [agents, setAgents] = useState<AgentWithAssignment[]>([]);
   const [activeAgent, setActiveAgent] = useState<AgentWithAssignment | null>(null);
   const [activeSubmissionId, setActiveSubmissionId] = useState<string | null>(null);
+  // Only true when the currently-open submission was reached via the
+  // discrepancy report's "View" — drives whether the audit panel shows a
+  // "Back to discrepancy report" affordance (see its onBack prop) instead
+  // of just an X that closes everything.
+  const [submissionFromReport, setSubmissionFromReport] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const { data: discrepancyReport } = useDiscrepancyReport(reportOpen);
 
   const load = useCallback(() => {
     api.get<AgentWithAssignment[]>("/api/agents").then((res) => setAgents(res.data));
@@ -453,6 +494,7 @@ export function CampaignManagerPage() {
     <div className="flex flex-col gap-6">
       <div>
         <h1 className="font-display text-2xl font-semibold">Campaign manager</h1>
+        {me?.aspirant_name && <p className="text-sm font-medium text-primary">Managing campaign for {me.aspirant_name}</p>}
         <p className="text-sm text-muted-foreground">
           Assign each field agent to a polling station and elective position — agents never pick this themselves.
         </p>
@@ -526,17 +568,60 @@ export function CampaignManagerPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Submissions</CardTitle>
-          <CardDescription>
-            Forms uploaded by your agents, with each one's photo and full correction history — {submissions.length} shown
-          </CardDescription>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex flex-col gap-1">
+              <CardTitle>Submissions</CardTitle>
+              <CardDescription>
+                Forms uploaded by your agents, with each one's photo and full correction history — {submissions.length} shown
+              </CardDescription>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => setReportOpen(true)}>
+              <ClipboardList className="mr-1.5 size-4" />
+              Discrepancy report
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
-          <SubmissionsTable submissions={submissions} onSelect={setActiveSubmissionId} />
+          <SubmissionsTable
+            submissions={submissions}
+            onSelect={(id) => {
+              setSubmissionFromReport(false);
+              setActiveSubmissionId(id);
+            }}
+          />
         </CardContent>
       </Card>
 
-      <SubmissionAuditPanel submissionId={activeSubmissionId} onClose={() => setActiveSubmissionId(null)} />
+      <SubmissionAuditPanel
+        submissionId={activeSubmissionId}
+        onClose={() => {
+          setActiveSubmissionId(null);
+          setSubmissionFromReport(false);
+        }}
+        onBack={
+          submissionFromReport
+            ? () => {
+                setActiveSubmissionId(null);
+                setReportOpen(true);
+              }
+            : undefined
+        }
+      />
+
+      <DiscrepancyReportDialog
+        open={reportOpen}
+        onOpenChange={setReportOpen}
+        report={discrepancyReport}
+        onSelectSubmission={(id) => {
+          // Hand off from the report to the audit panel rather than
+          // stacking two dialogs — the report closes, the specific
+          // submission it pointed at opens in its place, and gets the
+          // "Back to discrepancy report" affordance (see onBack above).
+          setReportOpen(false);
+          setSubmissionFromReport(true);
+          setActiveSubmissionId(id);
+        }}
+      />
 
       <CandidatesCard />
     </div>

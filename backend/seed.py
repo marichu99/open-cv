@@ -17,6 +17,7 @@ from flask.cli import with_appcontext
 
 from app.extensions import db
 from app.models import Agent
+from app.models.agent import PRIVILEGED_ROLES
 
 # Every account signs in with a one-time code emailed to it — so unlike a
 # password, `email` here isn't optional bookkeeping, it's the only way any
@@ -41,6 +42,18 @@ def _seed_accounts():
         )
         if acc.get("verified"):
             agent.phone_verified_at = datetime.now(timezone.utc)
+        # PRIVILEGED_ROLES (admin/coordinator/campaign_manager/aspirant) are
+        # inert until activated_at is set (see Agent.awaiting_activation) —
+        # added by migration c3f1a72b9d84 after this command already
+        # existed, and never updated to match. Without this, the seeded
+        # admin account itself comes in pending, with no already-activated
+        # admin anywhere to approve it — a dead-end bootstrap. These are
+        # trusted demo accounts created by whoever has shell access to run
+        # this command, not a self-registration, so activating them here is
+        # the same trust boundary the migration's own backfill used for
+        # every pre-existing row.
+        if acc["role"] in PRIVILEGED_ROLES:
+            agent.activated_at = datetime.now(timezone.utc)
         db.session.add(agent)
     db.session.commit()
 

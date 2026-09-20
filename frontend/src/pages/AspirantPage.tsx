@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useAgentsWithCoverage, useSubmissionsFeed } from "@/lib/hooks";
+import { useAuth } from "@/lib/auth-context";
+import { useAgentsWithCoverage, useSubmissionsFeed, usePositionsWithData } from "@/lib/hooks";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
@@ -9,16 +10,26 @@ import { SubmissionAuditPanel } from "@/components/dashboard/SubmissionAuditPane
 import { positionLabel } from "@/lib/utils";
 
 export function AspirantPage() {
+  const { agent } = useAuth();
   const { agents } = useAgentsWithCoverage();
   const { data: submissions } = useSubmissionsFeed({});
+  const { data: positions } = usePositionsWithData();
   const [activeId, setActiveId] = useState<string | null>(null);
 
   const uploaded = agents.filter((a) => a.latest_submission_status !== null && a.latest_submission_status !== undefined);
+  const candidate = agent?.candidate ?? null;
+  const candidatePosition = positions.find((p) => p.id === candidate?.position_id);
 
   return (
     <div className="flex flex-col gap-6">
       <div>
         <h1 className="font-display text-2xl font-semibold">Aspirant overview</h1>
+        {candidate && (
+          <p className="text-sm font-medium text-primary">
+            Vying for {candidatePosition ? positionLabel(candidatePosition.name) : "your race"}
+            {candidate.party ? ` · ${candidate.party}` : ""}
+          </p>
+        )}
         <p className="text-sm text-muted-foreground">
           Which field agents have reported in, and every submitted form with its full correction history. For the live
           tally itself, see the <Link to="/dashboard" className="underline">public dashboard</Link>.

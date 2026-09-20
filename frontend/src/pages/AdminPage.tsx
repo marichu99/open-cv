@@ -1,8 +1,10 @@
 import { useState } from "react";
+import { useAuth } from "@/lib/auth-context";
 import { useSubmissionsFeed } from "@/lib/hooks";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ReviewDialog } from "@/components/admin/ReviewDialog";
+import { PendingApprovals } from "@/components/admin/PendingApprovals";
 import { SubmissionsTable } from "@/components/dashboard/SubmissionsTable";
 import type { SubmissionStatus } from "@/types";
 
@@ -17,6 +19,7 @@ const STATUS_OPTIONS: { value: SubmissionStatus | "all" | "discrepancies"; label
 ];
 
 export function AdminPage() {
+  const { agent } = useAuth();
   const [status, setStatus] = useState<string>("discrepancies");
   const [activeId, setActiveId] = useState<string | null>(null);
 
@@ -51,6 +54,10 @@ export function AdminPage() {
           </SelectContent>
         </Select>
       </div>
+
+      {/* Listing non-agent roles is admin-only server-side (see
+          api/agents.py's list_agents) — a coordinator would just get 403s. */}
+      {agent?.effective_role === "admin" && <PendingApprovals />}
 
       <Card>
         <CardHeader>
