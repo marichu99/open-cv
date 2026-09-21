@@ -49,11 +49,13 @@ export function SubmissionAuditPanel({
   // Same arithmetic the backend's own gate checks at finalize time
   // (api/submissions.py's _arithmetic_ok) — recomputed here so the mismatch
   // the warning banner names is actually visible in the numbers themselves,
-  // not just asserted in a sentence above them.
+  // not just asserted in a sentence above them. Rejected ballots are a
+  // separately-printed count on the real form, not part of this sum — valid
+  // votes cast already excludes them by definition, so they're shown below
+  // only as their own informational row, never added into the comparison.
   const candidateTotal = submission?.vote_records?.reduce((sum, v) => sum + v.effective_votes, 0) ?? 0;
-  const computedTotal = candidateTotal + (submission?.rejected_ballots ?? 0);
   const declaredTotal = submission?.total_votes_cast ?? null;
-  const totalsMismatch = declaredTotal !== null && computedTotal !== declaredTotal;
+  const totalsMismatch = declaredTotal !== null && candidateTotal !== declaredTotal;
 
   return (
     <Dialog open={!!submissionId} onOpenChange={(open) => !open && onClose()}>
@@ -123,8 +125,8 @@ export function SubmissionAuditPanel({
                   <span className="font-mono tabular-nums">{submission.rejected_ballots}</span>
                 </div>
                 <div className={cn("flex justify-between text-sm", totalsMismatch && "text-destructive")}>
-                  <span className={totalsMismatch ? "" : "text-muted-foreground"}>Candidates + rejected</span>
-                  <span className="font-mono tabular-nums">{computedTotal}</span>
+                  <span className={totalsMismatch ? "" : "text-muted-foreground"}>Sum of candidate votes</span>
+                  <span className="font-mono tabular-nums">{candidateTotal}</span>
                 </div>
                 <div className={cn("flex justify-between text-sm font-medium", totalsMismatch && "text-destructive")}>
                   <span>Total votes cast{totalsMismatch ? " (declared on form)" : ""}</span>
@@ -132,10 +134,10 @@ export function SubmissionAuditPanel({
                 </div>
                 {totalsMismatch && (
                   <p className="rounded-md bg-destructive/10 px-2.5 py-1.5 text-xs text-destructive">
-                    Off by {Math.abs((declaredTotal ?? 0) - computedTotal)} —{" "}
-                    {(declaredTotal ?? 0) > computedTotal
-                      ? "the form's declared total is higher than what candidates + rejected ballots add up to."
-                      : "candidates + rejected ballots add up to more than the form's declared total."}
+                    Off by {Math.abs((declaredTotal ?? 0) - candidateTotal)} —{" "}
+                    {(declaredTotal ?? 0) > candidateTotal
+                      ? "the form's declared total is higher than what the candidates add up to."
+                      : "the candidates add up to more than the form's declared total."}
                   </p>
                 )}
               </div>

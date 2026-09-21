@@ -49,7 +49,10 @@ def test_draft_then_finalize_auto_approves_when_confident(client, app, geo, monk
             result.total_votes_confidence = 0.97
             result.rejected_ballots_confidence = 0.97
             result.warnings = []
-            result.total_votes_cast = sum(v.votes for v in result.votes) + result.rejected_ballots
+            # Valid votes cast = sum of candidates alone — rejected ballots
+            # are a separate printed count, not added on top (see
+            # api/submissions.py's _arithmetic_ok).
+            result.total_votes_cast = sum(v.votes for v in result.votes)
             return result
 
     from app.services import extraction as extraction_api
@@ -405,7 +408,10 @@ def test_public_image_available_once_a_submission_is_tallied(client, app, geo, m
             result.total_votes_confidence = 0.97
             result.rejected_ballots_confidence = 0.97
             result.warnings = []
-            result.total_votes_cast = sum(v.votes for v in result.votes) + result.rejected_ballots
+            # Valid votes cast = sum of candidates alone — rejected ballots
+            # are a separate printed count, not added on top (see
+            # api/submissions.py's _arithmetic_ok).
+            result.total_votes_cast = sum(v.votes for v in result.votes)
             return result
 
     monkeypatch.setattr(extraction_api, "get_extraction_service", lambda backend: CleanMock())
@@ -538,7 +544,10 @@ def test_agent_can_correct_votes_before_finalize(client, app, geo, monkeypatch):
             for v in result.votes:
                 v.confidence = 0.97
             result.warnings = []
-            result.total_votes_cast = sum(v.votes for v in result.votes) + result.rejected_ballots
+            # Valid votes cast = sum of candidates alone — rejected ballots
+            # are a separate printed count, not added on top (see
+            # api/submissions.py's _arithmetic_ok).
+            result.total_votes_cast = sum(v.votes for v in result.votes)
             return result
 
     monkeypatch.setattr(extraction_api, "get_extraction_service", lambda backend: CleanMock())
@@ -722,7 +731,10 @@ def test_flagged_submissions_still_count_toward_tally_but_show_in_discrepancies_
             result = super().extract(image_path, position, declared_form_type)
             for v in result.votes:
                 v.confidence = 0.97
-            result.total_votes_cast = sum(v.votes for v in result.votes) + result.rejected_ballots
+            # Valid votes cast = sum of candidates alone — rejected ballots
+            # are a separate printed count, not added on top (see
+            # api/submissions.py's _arithmetic_ok).
+            result.total_votes_cast = sum(v.votes for v in result.votes)
             result.warnings = ["Row 2 of Polling Station Counts is ambiguous — reads as '600' or '000'"]
             return result
 
@@ -732,7 +744,10 @@ def test_flagged_submissions_still_count_toward_tally_but_show_in_discrepancies_
             for v in result.votes:
                 v.confidence = 0.5
             result.total_votes_confidence = 0.5
-            result.total_votes_cast = sum(v.votes for v in result.votes) + result.rejected_ballots
+            # Valid votes cast = sum of candidates alone — rejected ballots
+            # are a separate printed count, not added on top (see
+            # api/submissions.py's _arithmetic_ok).
+            result.total_votes_cast = sum(v.votes for v in result.votes)
             result.warnings = []
             return result
 
@@ -743,7 +758,10 @@ def test_flagged_submissions_still_count_toward_tally_but_show_in_discrepancies_
                 v.confidence = 0.97
             result.total_votes_confidence = 0.97
             result.rejected_ballots_confidence = 0.97
-            result.total_votes_cast = sum(v.votes for v in result.votes) + result.rejected_ballots
+            # Valid votes cast = sum of candidates alone — rejected ballots
+            # are a separate printed count, not added on top (see
+            # api/submissions.py's _arithmetic_ok).
+            result.total_votes_cast = sum(v.votes for v in result.votes)
             result.warnings = []
             return result
 

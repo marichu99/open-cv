@@ -63,9 +63,17 @@ def _scope_submissions(role: str, identity: str):
 
 
 def _arithmetic_ok(submission: FormSubmission) -> bool:
+    """The IEBC form prints "Total Number of Valid Votes Cast" and "Total
+    Number of Rejected Ballot Papers" as two independent counts, not one
+    derived from the other — valid votes cast already excludes rejected
+    ballots by definition, it's not (candidates + rejected). Summing them
+    in here previously produced a false mismatch on any form with a
+    nonzero rejected-ballot count whose candidate figures were actually
+    correct (e.g. 168+3+140+0=311 candidates, 311 declared, 3 rejected —
+    flagged as "don't add up" when it did)."""
     if submission.total_votes_cast is None:
         return False
-    total = sum(v.effective_votes for v in submission.vote_records) + (submission.rejected_ballots or 0)
+    total = sum(v.effective_votes for v in submission.vote_records)
     return total == submission.total_votes_cast
 
 
@@ -254,7 +262,7 @@ def finalize(submission_id):
     # but stay visible for a coordinator to spot-check after the fact.
     warnings = list(submission.warnings or [])
     if not _arithmetic_ok(submission):
-        warnings.append("Extracted candidate votes + rejected ballots don't add up to the declared total votes cast")
+        warnings.append("Extracted candidate votes don't add up to the declared total votes cast")
     if float(submission.ocr_confidence_avg or 0) / 100 < threshold:
         warnings.append(f"Overall extraction confidence below the {threshold:.0%} review threshold")
     submission.warnings = warnings

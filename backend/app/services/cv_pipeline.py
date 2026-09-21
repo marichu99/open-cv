@@ -110,14 +110,19 @@ class MockExtractionService(ExtractionService):
                 confidence = rng.uniform(0.55, 0.84)
             votes.append(FieldExtraction(candidate_name=name, votes=base, confidence=round(confidence, 4)))
 
+        # Independent of the candidate sum — a form's "Total Number of
+        # Rejected Ballot Papers" and "Total Number of Valid Votes Cast"
+        # are two separately-printed counts, not one derived from the
+        # other (valid votes cast already excludes rejected ballots by
+        # definition — see api/submissions.py's _arithmetic_ok).
         rejected = rng.randint(0, 12)
-        total_cast = sum(v.votes for v in votes) + rejected
+        total_cast = sum(v.votes for v in votes)
 
         warnings: list[str] = []
         # Rarely simulate a genuine arithmetic mismatch (mis-transcribed digit).
         if rng.random() < 0.08:
             total_cast += rng.choice([-1, 1]) * rng.randint(1, 15)
-            warnings.append("sum(candidate votes) + rejected_ballots does not equal total_votes_cast")
+            warnings.append("sum(candidate votes) does not equal total_votes_cast")
 
         return ExtractionResult(
             form_type_detected=declared_form_type,
