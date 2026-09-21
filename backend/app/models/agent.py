@@ -3,7 +3,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from app.extensions import db
 from app.models.base import uuid_pk, utcnow
 
-ROLES = ("agent", "campaign_manager", "coordinator", "admin", "viewer")
+ROLES = ("agent", "campaign_manager", "coordinator", "admin", "viewer", "aspirant")
 
 #: Roles that can act on other people's data — assign agents to stations,
 #: moderate submissions, manage candidates. Signup for these is open (see
@@ -11,7 +11,13 @@ ROLES = ("agent", "campaign_manager", "coordinator", "admin", "viewer")
 #: admin sets `activated_at`; until then the JWT carries PENDING_ROLE.
 #: Plain "agent" is deliberately not here — an agent already can't do
 #: anything until a campaign manager assigns them a position, so gating
-#: them twice would just break field onboarding.
+#: them twice would just break field onboarding. `aspirant` is deliberately
+#: NOT here either, on purpose (not an oversight) — the aspirant is the top
+#: of this system's hierarchy, answering to no admin, so admin approval of
+#: an aspirant account was removed; registering and verifying a phone number
+#: is enough (see api/auth.py's register_aspirant). This does mean whoever
+#: registers as aspirant first gets full unscoped read access immediately —
+#: acceptable here because this deployment serves exactly one candidacy.
 PRIVILEGED_ROLES = ("campaign_manager", "coordinator", "admin")
 
 #: The role claim issued to a privileged account that hasn't been activated
@@ -37,7 +43,21 @@ class Agent(db.Model):
     in api/auth.py's CAMPAIGN_MANAGER_OTP_EMAIL, on top of their own
     address. `assigned_station_id`/`positions` are set exclusively by a
     campaign_manager/admin (see api/agents.py) — never by the agent
-    themselves, not even at signup."""
+    themselves, not even at signup. `assigned_by` records which campaign
+    manager last set that assignment, which is what scopes a campaign
+    manager's read access to submissions/images/logs to their own agents
+    (see app/api/submissions.py's can_view_submission). `candidate_id` is
+    the aspirant-only counterpart: the race they declared at signup (see
+    api/auth.py's register_aspirant), linked to their own Candidate roster
+    entry so their vote count shows up in the tally like anyone else's.
+    `aspirant_id` is the campaign-manager-only counterpart: which aspirant's
+    campaign they signed up to run, chosen at registration from the list of
+    already-registered aspirants (register_campaign_manager) — mirrors
+    assigned_by one level up the hierarchy. Purely a declared relationship
+    today, not a data-isolation boundary — every aspirant in this
+    deployment shares the same candidates/positions/stations regardless of
+    which campaign manager set them up (see the non-goal note on
+    PRIVILEGED_ROLES: this is still a single-candidacy deployment)."""
 
     __tablename__ = "agent"
 
@@ -47,6 +67,16 @@ class Agent(db.Model):
     email = db.Column(db.Text, unique=True)  # OTP delivery address
     phone_verified_at = db.Column(db.DateTime(timezone=True))
     assigned_station_id = db.Column(UUID(as_uuid=True), db.ForeignKey("polling_station.id"))
+    #: The campaign manager who last set this agent's assignment via
+    #: PATCH /api/agents/:id/assignment. Null when an admin made the
+    #: assignment instead, or when the agent has never been assigned.
+    assigned_by = db.Column(UUID(as_uuid=True), db.ForeignKey("agent.id"))
+    #: The aspirant's own candidacy — set once, at registration (see
+    #: api/auth.py's register_aspirant). Null for every other role.
+    candidate_id = db.Column(UUID(as_uuid=True), db.ForeignKey("candidate.id"))
+    #: Campaign-manager-only: the aspirant (another Agent row, role=
+    #: "aspirant") they registered under. Null for every other role.
+    aspirant_id = db.Column(UUID(as_uuid=True), db.ForeignKey("agent.id"))
     role = db.Column(db.Text, nullable=False, default="agent")
     created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
 
@@ -56,6 +86,11 @@ class Agent(db.Model):
     activated_at = db.Column(db.DateTime(timezone=True))
 
     positions = db.relationship("ElectivePosition", secondary=agent_position, order_by="ElectivePosition.form_series")
+    candidate = db.relationship("Candidate")
+    # foreign_keys is required here — Agent already has a second self-FK
+    # (assigned_by), so SQLAlchemy can't infer which column this join
+    # condition means without disambiguation.
+    aspirant = db.relationship("Agent", remote_side=[id], foreign_keys=[aspirant_id])
 
     @property
     def awaiting_activation(self) -> bool:
@@ -83,7 +118,11 @@ class Agent(db.Model):
             "awaiting_activation": self.awaiting_activation,
             "activated_at": self.activated_at.isoformat() if self.activated_at else None,
             "assigned_station_id": str(self.assigned_station_id) if self.assigned_station_id else None,
+            "assigned_by": str(self.assigned_by) if self.assigned_by else None,
             "position_ids": [str(p.id) for p in self.positions],
+            "candidate": self.candidate.to_dict() if self.candidate else None,
+            "aspirant_id": str(self.aspirant_id) if self.aspirant_id else None,
+            "aspirant_name": self.aspirant.full_name if self.aspirant else None,
         }
 
 

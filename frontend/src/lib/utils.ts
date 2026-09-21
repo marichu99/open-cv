@@ -21,3 +21,15 @@ export function positionLabel(name: string) {
     .map((w) => w[0].toUpperCase() + w.slice(1))
     .join(" ");
 }
+
+/** Shared status→badge-variant mapping for a FormSubmission, used anywhere a
+ * submission list is rendered (moderation queue, campaign-manager and
+ * aspirant submission views). */
+export const SUBMISSION_STATUS_VARIANT: Record<string, "success" | "warning" | "destructive" | "neutral"> = {
+  auto_approved: "success",
+  manually_approved: "success",
+  pending_review: "warning",
+  rejected: "destructive",
+  duplicate: "destructive",
+  draft: "neutral",
+};

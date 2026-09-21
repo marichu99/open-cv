@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { LayoutDashboard, Camera, Users, ShieldCheck } from "lucide-react";
+import { LayoutDashboard, Camera, Users, ShieldCheck, Flag } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { SidebarShell, type SidebarNavItem } from "@/components/layout/Sidebar";
@@ -10,6 +10,7 @@ const SIDEBAR_NAV: (SidebarNavItem & { roles: Role[] | null })[] = [
   { to: "/agent", label: "Agent upload", icon: Camera, roles: ["agent"] },
   { to: "/campaign-manager", label: "Campaign manager", icon: Users, roles: ["campaign_manager", "admin"] },
   { to: "/admin", label: "Moderation", icon: ShieldCheck, roles: ["coordinator", "admin"] },
+  { to: "/aspirant", label: "Aspirant overview", icon: Flag, roles: ["aspirant", "admin"] },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {

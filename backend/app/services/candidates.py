@@ -10,7 +10,7 @@ vote count across rows — see `_find_match`.
 import re
 
 from app.extensions import db
-from app.models import Candidate, ElectivePosition
+from app.models import Agent, Candidate, County, Constituency, ElectivePosition, Ward
 
 
 def normalize_name(name: str) -> str:
@@ -76,3 +76,47 @@ def geo_scope_for_position(position: ElectivePosition, station) -> dict:
     if position.level == "county":
         return {"county_id": constituency.county_id}
     return {}  # national
+
+
+def inherited_assignment(agent: Agent) -> dict | None:
+    """What a field agent's campaign-manager -> aspirant chain already
+    implies about their race and geography, before a campaign manager has
+    assigned anything explicitly (see api/agents.py's assign_station and
+    api/auth.py's register_agent, the two callers). Walks the relational
+    chain each signup already declares — Agent.assigned_by (the campaign
+    manager) -> Agent.aspirant_id -> Agent.candidate_id -> the candidate's
+    own position/geo scope — rather than copying it onto the agent row, so
+    it can never drift out of sync if the aspirant's own candidacy is ever
+    corrected.
+
+    None when the agent has no campaign manager yet, or that campaign
+    manager hasn't linked to an aspirant with a resolvable candidacy.
+    `county`/`constituency`/`ward` are each None unless the aspirant's own
+    position.level implies that level — a national position (e.g.
+    President) implies no geography to narrow at all, only the position
+    itself."""
+    campaign_manager = db.session.get(Agent, agent.assigned_by) if agent.assigned_by else None
+    aspirant = campaign_manager.aspirant if campaign_manager else None
+    candidate = aspirant.candidate if aspirant else None
+    if not candidate:
+        return None
+
+    position = db.session.get(ElectivePosition, candidate.position_id)
+    ward = db.session.get(Ward, candidate.ward_id) if candidate.ward_id else None
+    constituency = (
+        db.session.get(Constituency, candidate.constituency_id)
+        if candidate.constituency_id
+        else (db.session.get(Constituency, ward.constituency_id) if ward else None)
+    )
+    county = (
+        db.session.get(County, candidate.county_id)
+        if candidate.county_id
+        else (db.session.get(County, constituency.county_id) if constituency else None)
+    )
+    return {
+        "aspirant_name": aspirant.full_name,
+        "position": position.to_dict() if position else None,
+        "county": county.to_dict() if county else None,
+        "constituency": constituency.to_dict() if constituency else None,
+        "ward": ward.to_dict() if ward else None,
+    }

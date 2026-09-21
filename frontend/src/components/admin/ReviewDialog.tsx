@@ -3,13 +3,18 @@ import { toast } from "sonner";
 import { api, API_URL, getToken } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { VerificationLogList } from "@/components/dashboard/VerificationLogList";
 import type { FormSubmission } from "@/types";
 
+/** A coordinator/admin can no longer correct vote figures or approve/reject
+ * a submission once the field agent has finalized it — that resolution is
+ * final (see api/review.py). The only thing left here is duplicate
+ * resolution: flagging that two agents uploaded the same physical form, or
+ * reversing that flag if it turns out to be wrong. */
 export function ReviewDialog({
   submissionId,
   onClose,
@@ -20,7 +25,6 @@ export function ReviewDialog({
   onDone: () => void;
 }) {
   const [submission, setSubmission] = useState<FormSubmission | null>(null);
-  const [corrections, setCorrections] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [imageSrc, setImageSrc] = useState<string | null>(null);
@@ -33,7 +37,6 @@ export function ReviewDialog({
     }
     api.get<FormSubmission>(`/api/submissions/${submissionId}`).then((res) => {
       setSubmission(res.data);
-      setCorrections({});
       setNotes("");
     });
     // The image endpoint requires a bearer token, so fetch it as a blob rather than <img src>.
@@ -45,19 +48,12 @@ export function ReviewDialog({
       .catch(() => setImageSrc(null));
   }, [submissionId]);
 
-  async function submitReview(action: "approve" | "reject" | "mark_duplicate") {
+  async function submitReview(action: "approve" | "mark_duplicate") {
     if (!submission) return;
     setBusy(true);
     try {
-      const payload = {
-        action,
-        notes: notes || undefined,
-        corrections: Object.entries(corrections)
-          .filter(([, v]) => v !== "")
-          .map(([candidate_id, v]) => ({ candidate_id, votes_corrected: Number(v) })),
-      };
-      await api.post(`/api/submissions/${submission.id}/review`, payload);
-      toast.success(`Submission ${action.replace("_", " ")}d`);
+      await api.post(`/api/submissions/${submission.id}/review`, { action, notes: notes || undefined });
+      toast.success(action === "mark_duplicate" ? "Marked as duplicate" : "Restored — no longer marked a duplicate");
       onDone();
       onClose();
     } catch (err) {
@@ -103,15 +99,12 @@ export function ReviewDialog({
                     <Badge variant={v.field_confidence < 85 ? "warning" : "success"}>
                       {v.field_confidence.toFixed(0)}%
                     </Badge>
-                    <span className="w-16 text-right font-mono text-sm tabular-nums text-muted-foreground line-through decoration-1">
-                      {v.votes_detected}
-                    </span>
-                    <Input
-                      className="w-24"
-                      placeholder="corrected"
-                      value={corrections[v.candidate_id] ?? ""}
-                      onChange={(e) => setCorrections((c) => ({ ...c, [v.candidate_id]: e.target.value }))}
-                    />
+                    {v.manually_overridden && (
+                      <span className="font-mono tabular-nums text-muted-foreground line-through decoration-1">
+                        {v.votes_detected}
+                      </span>
+                    )}
+                    <span className="w-12 text-right font-mono text-sm font-medium tabular-nums">{v.effective_votes}</span>
                   </div>
                 ))}
                 <Separator className="my-1" />
@@ -126,21 +119,31 @@ export function ReviewDialog({
               </div>
             </div>
 
+            <Separator className="my-4" />
+            <h3 className="mb-2 text-sm font-semibold">Audit log</h3>
+            <VerificationLogList logs={submission.logs ?? []} />
+
             <div className="mt-4 flex flex-col gap-1.5">
               <Label htmlFor="notes">Reviewer notes</Label>
               <Textarea id="notes" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} />
             </div>
 
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Button onClick={() => submitReview("approve")} disabled={busy}>
-                Approve
-              </Button>
-              <Button variant="outline" onClick={() => submitReview("mark_duplicate")} disabled={busy}>
-                Mark duplicate
-              </Button>
-              <Button variant="destructive" onClick={() => submitReview("reject")} disabled={busy}>
-                Reject
-              </Button>
+            <p className="mt-3 text-xs text-muted-foreground">
+              The field agent's own resolution is final — vote figures and approve/reject aren't available here
+              anymore. The only action left is flagging (or un-flagging) this as a duplicate of another submission for
+              the same station.
+            </p>
+
+            <div className="mt-2 flex flex-wrap gap-2">
+              {submission.duplicate_of ? (
+                <Button onClick={() => submitReview("approve")} disabled={busy}>
+                  Restore — not a duplicate
+                </Button>
+              ) : (
+                <Button variant="outline" onClick={() => submitReview("mark_duplicate")} disabled={busy}>
+                  Mark duplicate
+                </Button>
+              )}
             </div>
           </>
         )}

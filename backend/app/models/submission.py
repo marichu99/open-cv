@@ -150,15 +150,36 @@ class VoteRecord(db.Model):
 
 class VerificationLog(db.Model):
     __tablename__ = "verification_log"
+    __table_args__ = (
+        CheckConstraint(
+            f"(old_value IS NULL OR (old_value >= 0 AND old_value <= {MAX_VOTES_PER_FIELD})) AND "
+            f"(new_value IS NULL OR (new_value >= 0 AND new_value <= {MAX_VOTES_PER_FIELD}))",
+            name="ck_verification_log_values_range",
+        ),
+    )
 
     id = uuid_pk()
     submission_id = db.Column(UUID(as_uuid=True), db.ForeignKey("form_submission.id"), nullable=False)
     reviewer_id = db.Column(UUID(as_uuid=True), db.ForeignKey("agent.id"))
     action = db.Column(db.Text, nullable=False)
     notes = db.Column(db.Text)
+    #: Which candidate's figure this log row is about — set only for
+    #: action="manual_correct" rows, one row per corrected candidate (never a
+    #: batch of several candidates in one row), so old_value/new_value below
+    #: are unambiguous. Null for approve/reject/mark_duplicate rows.
+    candidate_id = db.Column(UUID(as_uuid=True), db.ForeignKey("candidate.id"))
+    #: The candidate's effective_votes immediately before this correction
+    #: (votes_corrected if one was already set, else votes_detected) and
+    #: immediately after. Kept here rather than only on VoteRecord because
+    #: VoteRecord.votes_corrected is a single mutable column — a second
+    #: correction overwrites the first with no other record of what it used
+    #: to be, which is exactly the audit trail this table exists to provide.
+    old_value = db.Column(db.Integer)
+    new_value = db.Column(db.Integer)
     created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
 
     reviewer = db.relationship("Agent")
+    candidate = db.relationship("Candidate")
 
     def to_dict(self):
         return {
@@ -167,5 +188,9 @@ class VerificationLog(db.Model):
             "reviewer_name": self.reviewer.full_name if self.reviewer else None,
             "action": self.action,
             "notes": self.notes,
+            "candidate_id": str(self.candidate_id) if self.candidate_id else None,
+            "candidate_name": self.candidate.full_name if self.candidate else None,
+            "old_value": self.old_value,
+            "new_value": self.new_value,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

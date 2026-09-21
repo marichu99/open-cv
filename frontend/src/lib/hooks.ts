@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { api } from "./api";
+import { api, API_URL, getToken } from "./api";
 import { getSocket } from "./socket";
 import type {
   County,
@@ -14,6 +14,8 @@ import type {
   VotesByGroup,
   GroupingLevel,
   FormSubmission,
+  AgentWithAssignment,
+  DiscrepancyReport,
 } from "@/types";
 
 // Lazy, cascading geography fetches — at national scale (47 counties, 290
@@ -138,9 +140,99 @@ export function useVotesByGroup(
 /** The coordinator/admin review queue — refetches on `tally_updated`
  * (emitted both when a new submission is finalized and when another
  * reviewer resolves one), so a newly-flagged submission or someone else's
- * review action shows up without a manual reload. */
+ * review action shows up without a manual reload. Backend-scoped per caller
+ * role (see api/submissions.py's list_submissions) — a campaign manager only
+ * ever gets back submissions from their own agents, an aspirant gets
+ * everything, no client-side filtering needed either way. */
 export function useSubmissionsFeed(params: Record<string, string>) {
   const query = new URLSearchParams(params).toString();
   const path = `/api/submissions${query ? `?${query}` : ""}`;
   return useLiveResource<FormSubmission[]>(path, []);
+}
+
+/** Every agent correction, superseded/reversed duplicate, and extraction-
+ * time flag (arithmetic, confidence, legibility, wrong race/station),
+ * grouped and narrated server-side — see GET /api/submissions/discrepancy-
+ * report. `enabled` gates the fetch so opening the report is what triggers
+ * it, not just having the page mounted (same reasoning as useSubmission
+ * gating on submissionId being non-null). */
+export function useDiscrepancyReport(enabled: boolean) {
+  return useLiveResource<DiscrepancyReport | null>(
+    enabled ? "/api/submissions/discrepancy-report" : null,
+    null,
+  );
+}
+
+/** A single submission's full detail (vote records + audit log), for the
+ * read-only SubmissionAuditPanel — kept separate from ReviewDialog's own
+ * inline fetch only because ReviewDialog also needs local editable
+ * `corrections` state seeded from the same response. */
+export function useSubmission(submissionId: string | null) {
+  return useLiveResource<FormSubmission | null>(
+    submissionId ? `/api/submissions/${submissionId}` : null,
+    null,
+  );
+}
+
+/** The submitted form photo, fetched as an authenticated blob (the image
+ * endpoint requires a bearer token, so it can't be used directly as an
+ * <img src>) — same pattern as ReviewDialog's inline fetch. `contentType`
+ * comes along so a caller offering a download link can pick a real file
+ * extension instead of guessing one. */
+export function useSubmissionImage(submissionId: string | null) {
+  const [imageSrc, setImageSrc] = useState<string | null>(null);
+  const [contentType, setContentType] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!submissionId) {
+      setImageSrc(null);
+      setContentType(null);
+      return;
+    }
+    let cancelled = false;
+    fetch(`${API_URL}/api/submissions/${submissionId}/image`, {
+      headers: { Authorization: `Bearer ${getToken()}` },
+    })
+      .then((r) => r.blob())
+      .then((blob) => {
+        if (cancelled) return;
+        setImageSrc(URL.createObjectURL(blob));
+        setContentType(blob.type || null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setImageSrc(null);
+        setContentType(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [submissionId]);
+
+  return { imageSrc, contentType };
+}
+
+/** Field agents with their latest-submission status attached, so an
+ * aspirant/campaign manager can see at a glance who's uploaded and who
+ * hasn't (backend's ?with_coverage=true — see api/agents.py). */
+export function useAgentsWithCoverage() {
+  const [agents, setAgents] = useState<AgentWithAssignment[]>([]);
+
+  const refresh = useCallback(() => {
+    api
+      .get<AgentWithAssignment[]>("/api/agents", { params: { with_coverage: "true" } })
+      .then((res) => setAgents(res.data))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const socket = getSocket();
+    socket.on("tally_updated", refresh);
+    return () => {
+      socket.off("tally_updated", refresh);
+    };
+  }, [refresh]);
+
+  return { agents, refresh };
 }

@@ -1,11 +1,11 @@
 import { useState } from "react";
+import { useAuth } from "@/lib/auth-context";
 import { useSubmissionsFeed } from "@/lib/hooks";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ReviewDialog } from "@/components/admin/ReviewDialog";
+import { PendingApprovals } from "@/components/admin/PendingApprovals";
+import { SubmissionsTable } from "@/components/dashboard/SubmissionsTable";
 import type { SubmissionStatus } from "@/types";
 
 const STATUS_OPTIONS: { value: SubmissionStatus | "all" | "discrepancies"; label: string }[] = [
@@ -18,16 +18,8 @@ const STATUS_OPTIONS: { value: SubmissionStatus | "all" | "discrepancies"; label
   { value: "all", label: "All statuses" },
 ];
 
-const STATUS_VARIANT: Record<string, "success" | "warning" | "destructive" | "neutral"> = {
-  auto_approved: "success",
-  manually_approved: "success",
-  pending_review: "warning",
-  rejected: "destructive",
-  duplicate: "destructive",
-  draft: "neutral",
-};
-
 export function AdminPage() {
+  const { agent } = useAuth();
   const [status, setStatus] = useState<string>("discrepancies");
   const [activeId, setActiveId] = useState<string | null>(null);
 
@@ -63,54 +55,17 @@ export function AdminPage() {
         </Select>
       </div>
 
+      {/* Listing non-agent roles is admin-only server-side (see
+          api/agents.py's list_agents) — a coordinator would just get 403s. */}
+      {agent?.effective_role === "admin" && <PendingApprovals />}
+
       <Card>
         <CardHeader>
           <CardTitle>Submissions</CardTitle>
           <CardDescription>{submissions.length} shown</CardDescription>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Station</TableHead>
-                <TableHead>Form</TableHead>
-                <TableHead>Agent</TableHead>
-                <TableHead className="text-right">Confidence</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {submissions.map((s) => (
-                <TableRow key={s.id}>
-                  <TableCell className="font-medium">{s.station_name}</TableCell>
-                  <TableCell>{s.form_type}</TableCell>
-                  <TableCell className="text-muted-foreground">{s.agent_name}</TableCell>
-                  <TableCell className="text-right font-mono tabular-nums">
-                    {s.ocr_confidence_avg?.toFixed(0) ?? "—"}%
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <Badge variant={STATUS_VARIANT[s.status] ?? "neutral"}>{s.status.replace("_", " ")}</Badge>
-                      {s.warnings.length > 0 && <Badge variant="destructive">flagged</Badge>}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <Button size="sm" variant="outline" onClick={() => setActiveId(s.id)}>
-                      Review
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {submissions.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
-                    Nothing here.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+          <SubmissionsTable submissions={submissions} onSelect={setActiveId} actionLabel="Review" />
         </CardContent>
       </Card>
 
