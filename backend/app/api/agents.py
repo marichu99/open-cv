@@ -56,12 +56,15 @@ def list_agents():
     """Field agents by default — campaign managers assign stations/positions
     to agents, not to other coordinators/admins/viewers.
 
-    `?role=` widens this so an admin can find the self-registered
-    campaign-manager accounts waiting on activation. Restricted to admins:
-    letting a campaign manager enumerate other campaign managers, coordinators
-    and admins would hand them the phone numbers and emails of exactly the
-    accounts worth targeting (every role signs in with a code to the address
-    on file — see api/auth.py).
+    `?role=` widens this. Admin can list any role — the one account with
+    cross-cutting oversight. An aspirant may additionally list
+    `role=campaign_manager` (scoped to their own, see below) so they can see
+    and approve the campaign managers who registered under them — see
+    `PATCH /:id/activation`. Nobody else can list a role other than `agent`:
+    letting a plain campaign manager enumerate other campaign
+    managers/coordinators/admins would hand them the phone numbers and
+    emails of exactly the accounts worth targeting (every role signs in
+    with a code to the address on file — see api/auth.py).
 
     `?with_coverage=true` adds each field agent's latest submission
     status/timestamp, so an aspirant or campaign manager can see who has
@@ -72,18 +75,21 @@ def list_agents():
     (Agent.assigned_by, see api/auth.py's register_agent); an aspirant sees
     only agents whose campaign manager picked THAT aspirant in turn
     (Agent.assigned_by -> Agent.aspirant_id), a two-hop cascade down the
-    same hierarchy campaign-manager signup declares. Admin stays unscoped —
-    the one role with cross-cutting oversight. Listing another role
-    (`?role=campaign_manager` etc, admin-only per the check above) is never
-    scoped this way; only the field-agent roster is.
+    same hierarchy campaign-manager signup declares. An aspirant listing
+    `role=campaign_manager` is scoped the same way one hop up
+    (Agent.aspirant_id == caller) — they can never see another aspirant's
+    campaign managers. Admin stays unscoped in every case.
     """
     role = request.args.get("role", "agent")
     caller_role = get_jwt().get("role")
     caller_identity = get_jwt_identity()
-    if role != "agent" and caller_role != "admin":
+    if caller_role == "admin":
+        pass  # unscoped, any role
+    elif caller_role == "aspirant":
+        if role not in ("agent", "campaign_manager"):
+            raise ApiError("Aspirants can only list field agents or their own campaign managers", status_code=403)
+    elif role != "agent":
         raise ApiError("Only an admin can list accounts other than field agents", status_code=403)
-    if caller_role == "aspirant" and role != "agent":
-        raise ApiError("Aspirants can only list field agents", status_code=403)
 
     q = Agent.query.filter_by(role=role)
     if role == "agent" and caller_role == "campaign_manager":
@@ -91,6 +97,8 @@ def list_agents():
     elif role == "agent" and caller_role == "aspirant":
         their_cms = db.session.query(Agent.id).filter(Agent.role == "campaign_manager", Agent.aspirant_id == caller_identity)
         q = q.filter(Agent.assigned_by.in_(their_cms))
+    elif role == "campaign_manager" and caller_role == "aspirant":
+        q = q.filter(Agent.aspirant_id == caller_identity)
     if request.args.get("awaiting_activation") == "true":
         q = q.filter(Agent.activated_at.is_(None))
     with_coverage = request.args.get("with_coverage") == "true"
@@ -98,7 +106,7 @@ def list_agents():
 
 
 @bp.patch("/<uuid:agent_id>/activation")
-@role_required("admin")
+@role_required("admin", "aspirant")
 def set_activation(agent_id):
     """Activates (or suspends) a privileged account — the gate that makes open
     campaign-manager signup safe. Until `activated_at` is set, api/auth.py
@@ -106,8 +114,16 @@ def set_activation(agent_id):
     role_required(...) anywhere, so it can sign in and see its own status and
     nothing else.
 
-    Admin-only on purpose: a campaign manager must not be able to activate
-    other campaign managers, or the gate is self-service again.
+    Admin can activate anyone in PRIVILEGED_ROLES — cross-cutting oversight,
+    same as everywhere else in this file. An aspirant can *only* activate a
+    campaign_manager who registered under THEM specifically
+    (agent.aspirant_id == caller) — never another aspirant's campaign
+    manager, and never a coordinator/admin account (those still need an
+    actual admin). This is the intended primary path now: the aspirant
+    knows who their real campaign managers are far better than a central
+    admin does, so they're the ones expected to actually use this day to
+    day — admin keeps the capability too, as a backstop, not because
+    aspirant approval is provisional.
 
     Suspending (`activated: false`) takes effect on the account's NEXT token —
     existing JWTs stay valid for up to JWT_ACCESS_TOKEN_EXPIRES because there
@@ -119,6 +135,13 @@ def set_activation(agent_id):
         raise ApiError("Not found", status_code=404)
     if agent.role not in PRIVILEGED_ROLES:
         raise ApiError(f"{agent.role} accounts don't require activation", status_code=400)
+
+    if get_jwt().get("role") == "aspirant":
+        if agent.role != "campaign_manager" or str(agent.aspirant_id) != get_jwt_identity():
+            raise ApiError(
+                "You can only approve campaign managers who registered under your own campaign",
+                status_code=403,
+            )
 
     data = request.get_json(force=True, silent=True) or {}
     if "activated" not in data:

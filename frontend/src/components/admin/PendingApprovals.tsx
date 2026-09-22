@@ -6,15 +6,17 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Button } from "@/components/ui/button";
 import type { AgentWithAssignment } from "@/types";
 
-/** Admin-only: the missing other half of PATCH /api/agents/:id/activation —
- * that endpoint existed already, but nothing in the UI ever called it, so
- * approving a self-registered campaign manager required a raw API request.
- * campaign_manager is the only role left in PRIVILEGED_ROLES that
- * self-registers — aspirant was deliberately removed from that gate (the
- * aspirant answers to no admin), so it no longer shows up here. Only admins
- * can list non-agent roles (see api/agents.py's list_agents), so this card
- * is meaningless for a coordinator and the caller is expected to only
- * render it for an admin session. */
+/** The UI for PATCH /api/agents/:id/activation — approving a self-registered
+ * campaign manager. Rendered for both an admin (unscoped — every pending
+ * campaign manager, any campaign) and an aspirant (scoped server-side to
+ * campaign managers who registered under THEM specifically — see
+ * api/agents.py's list_agents/set_activation); no prop needed to tell it
+ * which, the backend already returns/accepts only what that caller is
+ * allowed to see and approve. campaign_manager is the only role left in
+ * PRIVILEGED_ROLES that self-registers — aspirant itself was deliberately
+ * removed from that gate (the aspirant answers to no one), so it never
+ * shows up in this list. Meaningless for a coordinator or plain agent
+ * session — the caller is expected to only render it for admin/aspirant. */
 export function PendingApprovals() {
   const [pending, setPending] = useState<AgentWithAssignment[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
