@@ -7,6 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { SubmissionsTable } from "@/components/dashboard/SubmissionsTable";
 import { SubmissionAuditPanel } from "@/components/dashboard/SubmissionAuditPanel";
+import { PendingApprovals } from "@/components/admin/PendingApprovals";
 import { positionLabel } from "@/lib/utils";
 
 export function AspirantPage() {
@@ -35,6 +36,8 @@ export function AspirantPage() {
           tally itself, see the <Link to="/dashboard" className="underline">public dashboard</Link>.
         </p>
       </div>
+
+      <PendingApprovals />
 
       <Card>
         <CardHeader>
