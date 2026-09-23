@@ -81,20 +81,27 @@ function Sidebar({
           ))}
         </nav>
 
-        <div className="mt-auto flex items-center justify-between gap-2 border-t border-border pt-4">
+        <div className="mt-auto flex flex-col gap-3 border-t border-border pt-4">
           {!collapsed && (
-            <span className="truncate text-sm">
-              <span className="font-medium">{userName}</span>{" "}
-              <span className="block font-mono text-xs uppercase text-muted-foreground">{role}</span>
-            </span>
+            <NavLink to="/privacy" className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
+              Privacy Policy
+            </NavLink>
           )}
-          <button
-            onClick={onLogout}
-            title="Log out"
-            className="shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-          >
-            <LogOut size={16} />
-          </button>
+          <div className="flex items-center justify-between gap-2">
+            {!collapsed && (
+              <span className="truncate text-sm">
+                <span className="font-medium">{userName}</span>{" "}
+                <span className="block font-mono text-xs uppercase text-muted-foreground">{role}</span>
+              </span>
+            )}
+            <button
+              onClick={onLogout}
+              title="Log out"
+              className="shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <LogOut size={16} />
+            </button>
+          </div>
         </div>
       </aside>
     </>

@@ -85,6 +85,21 @@ class Agent(db.Model):
     #: Backfilled to now() for every pre-existing row by migration c3f1a72b9d84.
     activated_at = db.Column(db.DateTime(timezone=True))
 
+    #: When this account explicitly consented to the privacy policy at
+    #: registration (see api/auth.py's _record_consent) — the point of
+    #: recording this at all is to have real, provable consent on file, not
+    #: just a page nobody was ever asked to agree to. NULL for every account
+    #: that registered before this existed; no backfill possible, for the
+    #: same reason candidate_id/aspirant_id couldn't be — consent is a fact
+    #: about what actually happened at signup, not something a migration can
+    #: retroactively manufacture.
+    privacy_consent_at = db.Column(db.DateTime(timezone=True))
+    #: Which version of the privacy policy they agreed to (see
+    #: PRIVACY_POLICY_VERSION in api/auth.py) — lets a future policy change
+    #: identify exactly who consented under an older version and ought to be
+    #: asked again, rather than silently treating stale consent as current.
+    privacy_policy_version = db.Column(db.Text)
+
     positions = db.relationship("ElectivePosition", secondary=agent_position, order_by="ElectivePosition.form_series")
     candidate = db.relationship("Candidate")
     # foreign_keys is required here — Agent already has a second self-FK
@@ -123,6 +138,7 @@ class Agent(db.Model):
             "candidate": self.candidate.to_dict() if self.candidate else None,
             "aspirant_id": str(self.aspirant_id) if self.aspirant_id else None,
             "aspirant_name": self.aspirant.full_name if self.aspirant else None,
+            "privacy_consent_at": self.privacy_consent_at.isoformat() if self.privacy_consent_at else None,
         }
 
 

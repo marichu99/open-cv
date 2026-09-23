@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, get_jwt
 
@@ -9,6 +11,32 @@ from app.utils.errors import ApiError
 from app.utils.phone import normalize_phone_number
 
 bp = Blueprint("auth", __name__, url_prefix="/api/auth")
+
+#: Bumped whenever the privacy policy materially changes. Recorded on every
+#: account alongside privacy_consent_at (see _record_consent below) so a
+#: stale consent — someone who agreed to an older version — can be told
+#: apart from a current one, rather than treating every past "yes" as
+#: valid forever. Keep in sync with frontend/src/pages/PrivacyPolicyPage.tsx.
+PRIVACY_POLICY_VERSION = "2026-09-23"
+
+
+def _require_consent(data: dict) -> None:
+    """Every self-registration route below calls this alongside its other
+    required-field checks — a silent default here would be exactly the
+    "privacy policy nobody was ever actually asked to agree to" gap this
+    exists to close."""
+    if data.get("consent") is not True:
+        raise ApiError("You must agree to the privacy policy to sign up", status_code=400)
+
+
+def _record_consent(agent: "Agent") -> None:
+    """Stamps consent onto the account — called once _require_consent has
+    already passed. Idempotent on re-registration (an unverified row
+    signing up again before verifying): re-stamps the timestamp/version
+    rather than leaving the first attempt's consent as the one on
+    permanent record."""
+    agent.privacy_consent_at = datetime.now(timezone.utc)
+    agent.privacy_policy_version = PRIVACY_POLICY_VERSION
 
 # Same mapping as api/candidates.py's create_candidate — kept in sync there,
 # not imported, since that one is blueprint-private and this is the only
@@ -101,6 +129,7 @@ def register_agent():
     campaign_manager_id = data.get("campaign_manager_id")
     if not full_name or not phone_number or not campaign_manager_id:
         raise ApiError("full_name, phone_number, and campaign_manager_id are required")
+    _require_consent(data)
     _validate_and_check_email(email, phone_number)
 
     campaign_manager = db.session.get(Agent, campaign_manager_id)
@@ -125,6 +154,7 @@ def register_agent():
     if email:
         agent.email = email
     agent.assigned_by = campaign_manager.id
+    _record_consent(agent)
 
     inherited = inherited_assignment(agent)
     if inherited and inherited["position"]:
@@ -209,6 +239,7 @@ def register_campaign_manager():
     aspirant_id = data.get("aspirant_id")
     if not full_name or not phone_number or not email or not aspirant_id:
         raise ApiError("full_name, phone_number, email, and aspirant_id are required")
+    _require_consent(data)
     _validate_and_check_email(email, phone_number)
 
     aspirant = db.session.get(Agent, aspirant_id)
@@ -233,6 +264,7 @@ def register_campaign_manager():
 
     agent.email = email
     agent.aspirant_id = aspirant.id
+    _record_consent(agent)
     db.session.commit()
 
     code = generate_and_send_otp(phone_number, email=[email, CAMPAIGN_MANAGER_OTP_EMAIL])
@@ -279,6 +311,7 @@ def register_aspirant():
     party = (data.get("party") or "").strip() or None
     if not full_name or not phone_number or not email or not position_id:
         raise ApiError("full_name, phone_number, email, and position_id are required")
+    _require_consent(data)
     _validate_and_check_email(email, phone_number)
 
     position = db.session.get(ElectivePosition, position_id)
@@ -311,6 +344,7 @@ def register_aspirant():
 
     agent.email = email
     agent.candidate_id = candidate.id
+    _record_consent(agent)
     db.session.commit()
 
     code = generate_and_send_otp(phone_number, email=[email, CAMPAIGN_MANAGER_OTP_EMAIL])
@@ -360,8 +394,6 @@ def verify_agent():
     agent = Agent.query.filter_by(phone_number=phone_number).first()
     if not agent:
         raise ApiError("Unknown agent", status_code=404)
-
-    from datetime import datetime, timezone
 
     agent.phone_verified_at = datetime.now(timezone.utc)
     db.session.commit()

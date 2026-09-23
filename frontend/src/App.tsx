@@ -10,6 +10,7 @@ import { SignupPage } from "@/pages/SignupPage";
 import { AdminPage } from "@/pages/AdminPage";
 import { CampaignManagerPage } from "@/pages/CampaignManagerPage";
 import { AspirantPage } from "@/pages/AspirantPage";
+import { PrivacyPolicyPage } from "@/pages/PrivacyPolicyPage";
 
 export default function App() {
   return (
@@ -26,6 +27,9 @@ export default function App() {
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/agent" element={<UploadPage />} />
             <Route path="/login" element={<LoginPage />} />
+            {/* Public — has to be readable before anyone can agree to it at
+                signup (see SignupPage's consent checkbox, which links here). */}
+            <Route path="/privacy" element={<PrivacyPolicyPage />} />
             {/* Folded into "/"'s role picker — kept as a redirect for anyone with the old link. */}
             <Route path="/campaign-manager/signup" element={<Navigate to="/?role=campaign_manager" replace />} />
             <Route
