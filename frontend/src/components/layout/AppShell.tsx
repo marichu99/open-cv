@@ -52,6 +52,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <Link to="/dashboard" className="hover:text-foreground">
               Dashboard
             </Link>
+            <Link to="/privacy" className="hover:text-foreground">
+              Privacy
+            </Link>
           </nav>
           <Link to="/login">
             <Button size="sm">Sign in</Button>

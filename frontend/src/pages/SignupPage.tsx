@@ -155,6 +155,7 @@ export function SignupPage() {
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
+  const [consent, setConsent] = useState(false);
   const { agent, loading, login } = useAuth();
   const navigate = useNavigate();
 
@@ -226,7 +227,8 @@ export function SignupPage() {
   const aspirantReady = role !== "aspirant" || (!!positionId && (!scopeKey || !!scopeValue));
   const campaignManagerReady = role !== "campaign_manager" || !!aspirantId;
   const agentReady = role !== "agent" || (!!aspirantId && !!campaignManagerId);
-  const canSubmit = fullName.trim() && phone.trim() && emailValid && aspirantReady && campaignManagerReady && agentReady;
+  const canSubmit =
+    fullName.trim() && phone.trim() && emailValid && aspirantReady && campaignManagerReady && agentReady && consent;
 
   function changeRole() {
     setRole(null);
@@ -242,6 +244,7 @@ export function SignupPage() {
     setParty("");
     setAspirantId(null);
     setCampaignManagerId(null);
+    setConsent(false);
   }
 
   async function submitDetails(e: React.FormEvent) {
@@ -255,7 +258,12 @@ export function SignupPage() {
           : role === "campaign_manager"
           ? "/api/auth/campaign_managers/register"
           : "/api/auth/aspirants/register";
-      const payload: Record<string, string> = { full_name: fullName, phone_number: phone, email };
+      const payload: Record<string, string | boolean> = {
+        full_name: fullName,
+        phone_number: phone,
+        email,
+        consent, // canSubmit already requires this to be true before submitDetails can run
+      };
       if (role === "aspirant") {
         payload.position_id = positionId!;
         if (scopeKey && scopeValue) payload[scopeKey] = scopeValue;
@@ -596,6 +604,23 @@ export function SignupPage() {
                       are also copied to a fixed team inbox so new sign-ups are visible to the team.
                     </p>
                   )}
+
+                  <label className="flex items-start gap-2 text-xs text-muted-foreground">
+                    <input
+                      id="privacy-consent"
+                      type="checkbox"
+                      className="mt-0.5 size-4 shrink-0 rounded border-border accent-primary"
+                      checked={consent}
+                      onChange={(e) => setConsent(e.target.checked)}
+                    />
+                    <span>
+                      I have read and agree to the{" "}
+                      <Link to="/privacy" target="_blank" rel="noopener noreferrer" className="underline">
+                        Privacy Policy
+                      </Link>
+                      , including how my data is collected and shared with our service providers.
+                    </span>
+                  </label>
 
                   <Button type="submit" disabled={busy || !canSubmit} className="mt-1">
                     {busy ? "Sending code…" : "Continue"}
