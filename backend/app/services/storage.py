@@ -6,8 +6,41 @@ serve via signed URLs — see docs/DEPLOYMENT.md).
 """
 
 import hashlib
+import io
 import os
 import uuid
+
+from PIL import Image, ImageOps
+
+
+def _strip_exif(data: bytes) -> bytes:
+    """Re-encodes image bytes with all EXIF metadata removed before
+    anything is persisted. A phone photo's EXIF commonly embeds GPS
+    coordinates of exactly where it was taken (plus device make/model,
+    capture timestamp) — this app has no purpose for that and no business
+    retaining it; storing it unstripped is real, incidentally-collected
+    sensitive personal data with no lawful basis behind it (see the ODPC
+    registration's sensitive-data disclosure this was written to close).
+
+    exif_transpose() bakes the EXIF orientation tag into actual pixel
+    rotation first — a portrait phone photo would otherwise end up sideways
+    once the tag that would have corrected it is gone.
+
+    Falls back to the original bytes if Pillow can't decode them (e.g. a
+    corrupt upload) — that's not this function's problem to solve,
+    downstream (looks_blank, extraction) already handles an unreadable
+    image without this needing to guess at it."""
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            fmt = img.format or "JPEG"
+            img = ImageOps.exif_transpose(img)
+            if fmt.upper() == "JPEG" and img.mode in ("RGBA", "P"):
+                img = img.convert("RGB")
+            buf = io.BytesIO()
+            img.save(buf, format=fmt)
+            return buf.getvalue()
+    except Exception:
+        return data
 
 
 class LocalStorage:
@@ -21,13 +54,19 @@ class LocalStorage:
         Absolute, because Flask's send_file() resolves relative paths against
         app.root_path, not the process CWD — storing a relative path here
         looks fine until the image is served back and 404s.
+
+        Every upload passes through here before it's ever written to disk
+        or pushed to GCS (see GCSStorage.upload below, which just uploads
+        whatever LocalStorage already wrote) — the one place to strip EXIF
+        so it's gone regardless of which storage backend ends up serving
+        the image.
         """
         ext = os.path.splitext(file_storage.filename or "")[1].lower() or ".jpg"
         name = f"{uuid.uuid4()}{ext}"
         path = os.path.abspath(os.path.join(self.upload_dir, name))
 
         file_storage.stream.seek(0)
-        data = file_storage.read()
+        data = _strip_exif(file_storage.read())
         with open(path, "wb") as fh:
             fh.write(data)
 
