@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { OtpInput } from "@/components/ui/otp-input";
+import { isValidPhone, sanitizePhoneInput } from "@/lib/utils";
 
 const FIELD_WRAP = "flex items-center gap-2 rounded-md border border-input bg-card px-3 focus-within:ring-2 focus-within:ring-ring";
 const FIELD_INPUT = "h-10 border-0 bg-transparent px-0 shadow-none focus-visible:outline-none focus-visible:ring-0";
@@ -29,8 +30,11 @@ export function LoginPage() {
   const { login } = useAuth();
   const navigate = useNavigate();
 
+  const phoneValid = isValidPhone(phoneNumber);
+
   async function requestCode(e: React.FormEvent) {
     e.preventDefault();
+    if (!phoneValid) return;
     setSubmitting(true);
     try {
       const res = await api.post("/api/auth/agents/otp/request", { phone_number: phoneNumber });
@@ -81,15 +85,19 @@ export function LoginPage() {
                   <Input
                     id="phone"
                     required
+                    inputMode="tel"
                     className={FIELD_INPUT}
                     placeholder="+2547XXXXXXXX"
                     value={phoneNumber}
-                    onChange={(e) => setPhoneNumber(e.target.value)}
+                    onChange={(e) => setPhoneNumber(sanitizePhoneInput(e.target.value))}
                     autoComplete="username"
                   />
                 </div>
+                {phoneNumber.length > 0 && !phoneValid && (
+                  <p className="text-xs text-destructive">Enter a valid phone number (digits only, optionally starting with +).</p>
+                )}
               </div>
-              <Button type="submit" disabled={submitting} className="mt-1">
+              <Button type="submit" disabled={submitting || !phoneValid} className="mt-1">
                 {submitting ? "Sending…" : "Send code"}
               </Button>
 

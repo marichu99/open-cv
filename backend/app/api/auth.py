@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timezone
 
 from flask import Blueprint, request, jsonify, current_app
@@ -8,7 +9,12 @@ from app.models import Agent, ElectivePosition
 from app.services.candidates import get_or_create_candidate, inherited_assignment
 from app.services.otp import generate_and_send_otp, verify_otp
 from app.utils.errors import ApiError
-from app.utils.phone import normalize_phone_number
+from app.utils.phone import is_valid_phone_format, normalize_phone_number
+
+#: Same shape the frontend accepts (see frontend/src/lib/utils.ts's
+#: isValidEmail) — kept independent since this is what actually gates the
+#: data that ends up in the DB and in outbound OTP emails.
+EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
@@ -86,8 +92,19 @@ def _otp_email_for(agent: Agent) -> str | list[str]:
     return agent.email
 
 
+def _validate_phone(raw: str) -> str:
+    """Rejects anything but digits (with an optional leading +) before
+    handing off to normalize_phone_number — an empty string is left for the
+    caller's own "phone_number is required" check downstream rather than
+    reported as a format error here."""
+    raw = (raw or "").strip()
+    if raw and not is_valid_phone_format(raw):
+        raise ApiError("Phone number must contain only digits, optionally starting with a +")
+    return normalize_phone_number(raw)
+
+
 def _validate_and_check_email(email: str | None, phone_number: str) -> None:
-    if email and "@" not in email:
+    if email and not EMAIL_RE.match(email):
         raise ApiError("email is not valid")
     if email and Agent.query.filter(Agent.email == email, Agent.phone_number != phone_number).first():
         raise ApiError("Email is already in use")
@@ -124,7 +141,7 @@ def register_agent():
     assign_station) — this just saves them re-declaring the obvious race."""
     data = request.get_json(force=True) or {}
     full_name = (data.get("full_name") or "").strip()
-    phone_number = normalize_phone_number(data.get("phone_number") or "")
+    phone_number = _validate_phone(data.get("phone_number") or "")
     email = (data.get("email") or "").strip().lower() or None
     campaign_manager_id = data.get("campaign_manager_id")
     if not full_name or not phone_number or not campaign_manager_id:
@@ -234,7 +251,7 @@ def register_campaign_manager():
     the note on that constant."""
     data = request.get_json(force=True) or {}
     full_name = (data.get("full_name") or "").strip()
-    phone_number = normalize_phone_number(data.get("phone_number") or "")
+    phone_number = _validate_phone(data.get("phone_number") or "")
     email = (data.get("email") or "").strip().lower() or None
     aspirant_id = data.get("aspirant_id")
     if not full_name or not phone_number or not email or not aspirant_id:
@@ -305,7 +322,7 @@ def register_aspirant():
     note on that constant."""
     data = request.get_json(force=True) or {}
     full_name = (data.get("full_name") or "").strip()
-    phone_number = normalize_phone_number(data.get("phone_number") or "")
+    phone_number = _validate_phone(data.get("phone_number") or "")
     email = (data.get("email") or "").strip().lower() or None
     position_id = data.get("position_id")
     party = (data.get("party") or "").strip() or None
@@ -365,7 +382,7 @@ def request_agent_otp():
     code. Sends a fresh OTP without touching full_name/email; never creates
     an account."""
     data = request.get_json(force=True) or {}
-    phone_number = normalize_phone_number(data.get("phone_number") or "")
+    phone_number = _validate_phone(data.get("phone_number") or "")
     if not phone_number:
         raise ApiError("phone_number is required")
 
@@ -383,7 +400,7 @@ def request_agent_otp():
 @bp.post("/agents/verify")
 def verify_agent():
     data = request.get_json(force=True) or {}
-    phone_number = normalize_phone_number(data.get("phone_number") or "")
+    phone_number = _validate_phone(data.get("phone_number") or "")
     code = (data.get("code") or "").strip()
     if not phone_number or not code:
         raise ApiError("phone_number and code are required")
