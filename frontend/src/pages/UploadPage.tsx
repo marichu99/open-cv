@@ -455,7 +455,6 @@ function UploadForm() {
                   <TableRow>
                     <TableHead>Candidate</TableHead>
                     <TableHead className="text-right">Votes</TableHead>
-                    <TableHead className="text-right">Confidence</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -477,24 +476,17 @@ function UploadForm() {
                           <span className="font-mono tabular-nums">{v.effective_votes}</span>
                         )}
                       </TableCell>
-                      <TableCell className="text-right font-mono tabular-nums">
-                        <span className={v.field_confidence < 85 ? "text-warning" : "text-primary"}>
-                          {v.field_confidence.toFixed(0)}%
-                        </span>
-                      </TableCell>
                     </TableRow>
                   ))}
                   <TableRow>
                     <TableCell className="font-medium">Rejected ballots</TableCell>
                     <TableCell className="text-right font-mono tabular-nums">{preview.rejected_ballots}</TableCell>
-                    <TableCell />
                   </TableRow>
                   <TableRow>
                     <TableCell className="font-medium">Total votes cast</TableCell>
                     <TableCell className="text-right font-mono tabular-nums font-semibold">
                       {preview.total_votes_cast}
                     </TableCell>
-                    <TableCell />
                   </TableRow>
                 </TableBody>
                 </Table>
