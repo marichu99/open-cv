@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Combobox } from "@/components/ui/combobox";
 import { OtpInput } from "@/components/ui/otp-input";
-import { cn, positionLabel } from "@/lib/utils";
+import { cn, isValidEmail, isValidPhone, positionLabel, sanitizePhoneInput } from "@/lib/utils";
 import type { ElectivePosition } from "@/types";
 
 type SignupRole = "agent" | "campaign_manager" | "aspirant";
@@ -223,12 +223,13 @@ export function SignupPage() {
     return <Navigate to={ROLE_HOME[agent.role] ?? "/dashboard"} replace />;
   }
 
-  const emailValid = /\S+@\S+\.\S+/.test(email);
+  const emailValid = isValidEmail(email);
+  const phoneValid = isValidPhone(phone);
   const aspirantReady = role !== "aspirant" || (!!positionId && (!scopeKey || !!scopeValue));
   const campaignManagerReady = role !== "campaign_manager" || !!aspirantId;
   const agentReady = role !== "agent" || (!!aspirantId && !!campaignManagerId);
   const canSubmit =
-    fullName.trim() && phone.trim() && emailValid && aspirantReady && campaignManagerReady && agentReady && consent;
+    fullName.trim() && phoneValid && emailValid && aspirantReady && campaignManagerReady && agentReady && consent;
 
   function changeRole() {
     setRole(null);
@@ -404,12 +405,16 @@ export function SignupPage() {
                       <Input
                         id="phone"
                         required
+                        inputMode="tel"
                         className={FIELD_INPUT}
                         placeholder="+2547XXXXXXXX"
                         value={phone}
-                        onChange={(e) => setPhone(e.target.value)}
+                        onChange={(e) => setPhone(sanitizePhoneInput(e.target.value))}
                       />
                     </div>
+                    {phone.length > 0 && !phoneValid && (
+                      <p className="text-xs text-destructive">Enter a valid phone number (digits only, optionally starting with +).</p>
+                    )}
                   </div>
 
                   <div className="flex flex-col gap-1.5">
@@ -426,9 +431,13 @@ export function SignupPage() {
                         onChange={(e) => setEmail(e.target.value)}
                       />
                     </div>
-                    <p className="text-xs text-muted-foreground">
-                      You'll sign in with a one-time code sent here — no password needed.
-                    </p>
+                    {email.length > 0 && !emailValid ? (
+                      <p className="text-xs text-destructive">Enter a valid email address.</p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        You'll sign in with a one-time code sent here — no password needed.
+                      </p>
+                    )}
                   </div>
 
                   {role === "aspirant" && (

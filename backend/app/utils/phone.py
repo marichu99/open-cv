@@ -1,5 +1,15 @@
 import re
 
+#: Digits only, with an optional leading "+" — no spaces, dashes, or other
+#: punctuation. Checked against the raw input before normalization so a
+#: typo'd letter isn't silently dropped by the \D strip below and mistaken
+#: for a different, valid number.
+PHONE_FORMAT_RE = re.compile(r"^\+?\d+$")
+
+
+def is_valid_phone_format(raw: str) -> bool:
+    return bool(PHONE_FORMAT_RE.match((raw or "").strip()))
+
 
 def normalize_phone_number(raw: str) -> str:
     """Normalize a Kenyan phone number to E.164 (+254XXXXXXXXX) so the same
